@@ -7,11 +7,18 @@ import { Maximize2 } from "lucide-react"
 import { MermaidDiagram } from "@/components/ui/mermaid-diagram"
 import { SvgDiagram } from "@/components/ui/svg-diagram"
 import { ThreeDiagram } from "@/components/ui/three-diagram"
+import { ChartBlock } from "@/components/ui/chart-block"
+import { PptBlock } from "@/components/ui/ppt-block"
+import { PdfBlock } from "@/components/ui/pdf-block"
+import { QuestionsBlock } from "@/components/ui/questions-block"
+import { PlanBlock } from "@/components/ui/plan-block"
 
 export type Visual = {
-  kind: "mermaid" | "svg" | "threejs"
+  kind: "mermaid" | "svg" | "threejs" | "chart" | "ppt" | "pdf"
   code: string
 }
+
+const EXPANDABLE = new Set(["mermaid", "svg", "threejs", "chart", "ppt", "pdf"])
 
 function VisualBlock({
   visual,
@@ -27,6 +34,12 @@ function VisualBlock({
       <MermaidDiagram chart={visual.code} streaming={streaming} />
     ) : visual.kind === "svg" ? (
       <SvgDiagram code={visual.code} streaming={streaming} />
+    ) : visual.kind === "chart" ? (
+      <ChartBlock code={visual.code} streaming={streaming} />
+    ) : visual.kind === "ppt" ? (
+      <PptBlock code={visual.code} streaming={streaming} />
+    ) : visual.kind === "pdf" ? (
+      <PdfBlock code={visual.code} streaming={streaming} />
     ) : (
       <ThreeDiagram code={visual.code} streaming={streaming} />
     )
@@ -37,7 +50,7 @@ function VisualBlock({
       {!streaming && onExpand && (
         <button
           onClick={() => onExpand(visual)}
-          className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-lg border border-border bg-background/80 px-2.5 py-1.5 text-xs text-foreground/80 opacity-0 backdrop-blur transition-opacity hover:bg-secondary group-hover/visual:opacity-100"
+          className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-black/50 px-2.5 py-1.5 text-xs text-white/80 opacity-0 backdrop-blur transition-opacity hover:bg-black/70 group-hover/visual:opacity-100"
           title="Open in side panel"
         >
           <Maximize2 className="size-3.5" />
@@ -52,10 +65,20 @@ export function MessageContent({
   content,
   streaming = false,
   onExpand,
+  onAnswerQuestions,
+  onApprovePlan,
+  onDenyPlan,
+  questionsAnswered = false,
+  planDecision = null,
 }: {
   content: string
   streaming?: boolean
   onExpand?: (v: Visual) => void
+  onAnswerQuestions?: (text: string) => void
+  onApprovePlan?: () => void
+  onDenyPlan?: () => void
+  questionsAnswered?: boolean
+  planDecision?: "approved" | "denied" | null
 }) {
   const openFences = (content.match(/```/g) || []).length
   const lastBlockUnclosed = streaming && openFences % 2 === 1
@@ -74,10 +97,33 @@ export function MessageContent({
             const lang = match?.[1]
             const text = String(children).replace(/\n$/, "")
 
-            if (lang === "mermaid" || lang === "svg" || lang === "threejs") {
+            if (lang === "questions") {
+              return (
+                <QuestionsBlock
+                  code={text}
+                  streaming={lastBlockUnclosed}
+                  answered={questionsAnswered}
+                  onSubmit={onAnswerQuestions}
+                />
+              )
+            }
+
+            if (lang === "plan") {
+              return (
+                <PlanBlock
+                  code={text}
+                  streaming={lastBlockUnclosed}
+                  decided={planDecision}
+                  onApprove={onApprovePlan}
+                  onDeny={onDenyPlan}
+                />
+              )
+            }
+
+            if (lang && EXPANDABLE.has(lang)) {
               return (
                 <VisualBlock
-                  visual={{ kind: lang, code: text }}
+                  visual={{ kind: lang as Visual["kind"], code: text }}
                   streaming={lastBlockUnclosed}
                   onExpand={onExpand}
                 />

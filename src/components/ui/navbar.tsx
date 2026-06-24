@@ -12,20 +12,22 @@ interface NavbarProps {
   brand?: string
   links?: NavLink[]
   ctaText?: string
+  ctaHref?: string
   onCtaClick?: () => void
 }
 
 const defaultLinks: NavLink[] = [
-  { label: "Models", href: "#models" },
-  { label: "Developers", href: "#developers" },
-  { label: "Resources", href: "#resources" },
-  { label: "Company", href: "#company" },
+  { label: "Models", href: "/#models" },
+  { label: "Developers", href: "/developers" },
+  { label: "Resources", href: "/resources" },
+  { label: "Company", href: "/#company" },
 ]
 
 export function Navbar({
   brand = "Simplicity",
   links = defaultLinks,
   ctaText = "Get early access",
+  ctaHref = "/chat",
   onCtaClick,
 }: NavbarProps) {
   const [open, setOpen] = useState(false)
@@ -36,7 +38,7 @@ export function Navbar({
         <div className="flex items-center justify-between pl-6 pr-2.5 py-2.5">
           {/* Brand */}
           <a
-            href="#"
+            href="/"
             className="flex items-center gap-2.5 text-[17px] font-semibold tracking-tight text-white"
           >
             <span className="size-1.5 rounded-full bg-white/80" />
@@ -58,12 +60,21 @@ export function Navbar({
           </ul>
 
           {/* Desktop CTA */}
-          <button
-            onClick={onCtaClick}
-            className="hidden md:inline-flex items-center rounded-full bg-white px-5 py-2 text-[13.5px] font-medium text-black transition-all duration-300 hover:bg-white/90 hover:shadow-[0_0_24px_-4px_rgba(255,255,255,0.5)]"
-          >
-            {ctaText}
-          </button>
+          {onCtaClick ? (
+            <button
+              onClick={onCtaClick}
+              className="hidden md:inline-flex items-center rounded-full bg-white px-5 py-2 text-[13.5px] font-medium text-black transition-all duration-300 hover:bg-white/90 hover:shadow-[0_0_24px_-4px_rgba(255,255,255,0.5)]"
+            >
+              {ctaText}
+            </button>
+          ) : (
+            <a
+              href={ctaHref}
+              className="hidden md:inline-flex items-center rounded-full bg-white px-5 py-2 text-[13.5px] font-medium text-black transition-all duration-300 hover:bg-white/90 hover:shadow-[0_0_24px_-4px_rgba(255,255,255,0.5)]"
+            >
+              {ctaText}
+            </a>
+          )}
 
           {/* Mobile toggle */}
           <button
@@ -92,15 +103,25 @@ export function Navbar({
                 </li>
               ))}
             </ul>
-            <button
-              onClick={() => {
-                setOpen(false)
-                onCtaClick?.()
-              }}
-              className="mt-3 w-full rounded-full border border-white/20 bg-white/15 px-5 py-2.5 text-sm font-medium text-white backdrop-blur-md transition-all duration-300 hover:bg-white/25"
-            >
-              {ctaText}
-            </button>
+            {onCtaClick ? (
+              <button
+                onClick={() => {
+                  setOpen(false)
+                  onCtaClick()
+                }}
+                className="mt-3 w-full rounded-full border border-white/20 bg-white/15 px-5 py-2.5 text-sm font-medium text-white backdrop-blur-md transition-all duration-300 hover:bg-white/25"
+              >
+                {ctaText}
+              </button>
+            ) : (
+              <a
+                href={ctaHref}
+                onClick={() => setOpen(false)}
+                className="mt-3 block w-full rounded-full border border-white/20 bg-white/15 px-5 py-2.5 text-center text-sm font-medium text-white backdrop-blur-md transition-all duration-300 hover:bg-white/25"
+              >
+                {ctaText}
+              </a>
+            )}
           </div>
         )}
       </nav>

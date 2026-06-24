@@ -17,6 +17,18 @@ function sanitize(input: string): string {
   // Remove a leading "mermaid" word if present on its own line.
   s = s.replace(/^mermaid\s*\n/i, "")
 
+  // --- Repair common invalid arrow forms the model produces ---
+  // Invalid labeled arrows like  -->|label|>  or  --|label|>  →  -->|label|
+  s = s.replace(/(--+|==+|-\.+-?)>?\s*\|([^|]*)\|\s*>/g, "-->|$2|")
+  // Stray "|>" after a label anywhere →  "|"
+  s = s.replace(/\|\s*>/g, "|")
+  // Arrowhead written as "|> B" (no label) →  "--> B"
+  s = s.replace(/(--+|==+)\s*>?\s*>\s*/g, "$1> ")
+  // Collapse accidental double arrowheads  -->>  (only valid in sequenceDiagram)
+  if (!/^\s*sequenceDiagram/m.test(s)) {
+    s = s.replace(/-->>/g, "-->")
+  }
+
   return s.trim()
 }
 

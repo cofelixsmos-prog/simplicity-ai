@@ -1,11 +1,13 @@
-// Shared model config used by both the chat UI and the API route.
+// Public model metadata, shared by the chat UI and the API route.
+// NOTE: the real upstream provider + model id for each entry are intentionally
+// NOT here — they live server-side only (in the chat API route) so the real
+// model names never ship in the browser bundle.
 
 export interface ModelOption {
-  id: string // our public id (a1 / r1)
+  id: string // our public id (a1 / r1 / d1)
   label: string // short label shown in the picker
   name: string // full display name
   description: string
-  groqModel: string // actual Groq model id
   supportsReasoning: boolean
 }
 
@@ -15,7 +17,6 @@ export const MODELS: ModelOption[] = [
     label: "A1",
     name: "Simplicity A1",
     description: "Fast, everyday intelligence",
-    groqModel: "llama-3.3-70b-versatile",
     supportsReasoning: false,
   },
   {
@@ -23,12 +24,18 @@ export const MODELS: ModelOption[] = [
     label: "R1",
     name: "Simplicity R1",
     description: "Frontier reasoning model",
-    groqModel: "openai/gpt-oss-120b",
     supportsReasoning: true,
+  },
+  {
+    id: "d1",
+    label: "D1",
+    name: "Simplicity D1",
+    description: "Fast and free, always on",
+    supportsReasoning: false,
   },
 ]
 
-export const DEFAULT_MODEL_ID = "r1"
+export const DEFAULT_MODEL_ID = "d1"
 
 export function getModel(id: string | undefined): ModelOption {
   return (

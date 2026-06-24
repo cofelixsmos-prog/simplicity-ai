@@ -128,3 +128,49 @@
     @apply font-sans;
   }
 }
+
+/* ── Liquid glass (Apple-style) ──────────────────────────────
+   Real refraction via an SVG displacement filter, layered with
+   blur + inset highlight. Monochrome, no color, no gradient. */
+.liquid-glass {
+  position: relative;
+  isolation: isolate;
+  background-color: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+.liquid-glass::before {
+  /* top-edge + rim highlight that sells the glass */
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset 1.5px 1.5px 0px -1px rgba(255, 255, 255, 0.6),
+    inset 0 0 4px 1px rgba(255, 255, 255, 0.25),
+    inset 0 -1px 6px -2px rgba(255, 255, 255, 0.15);
+}
+.liquid-glass::after {
+  /* the refractive backdrop layer */
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  backdrop-filter: blur(6px) saturate(1.1);
+  -webkit-backdrop-filter: blur(6px) saturate(1.1);
+  filter: url(#liquid-glass-filter);
+  overflow: hidden;
+}
+/* content always above the glass layers */
+.liquid-glass > * {
+  position: relative;
+  z-index: 1;
+}
+/* lighter variant for big panels (subtler distortion, more blur) */
+.liquid-glass-soft::after {
+  backdrop-filter: blur(18px) saturate(1.15);
+  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  filter: url(#liquid-glass-filter-soft);
+}

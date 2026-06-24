@@ -5,11 +5,17 @@ import type { Visual } from "@/components/ui/message-content"
 import { MermaidDiagram } from "@/components/ui/mermaid-diagram"
 import { SvgDiagram } from "@/components/ui/svg-diagram"
 import { ThreeDiagram } from "@/components/ui/three-diagram"
+import { ChartBlock } from "@/components/ui/chart-block"
+import { PptBlock } from "@/components/ui/ppt-block"
+import { PdfBlock } from "@/components/ui/pdf-block"
 
 const LABELS: Record<Visual["kind"], string> = {
   mermaid: "Flowchart",
   svg: "2D Illustration",
   threejs: "3D Model",
+  chart: "Chart",
+  ppt: "Presentation",
+  pdf: "Document",
 }
 
 export function VisualPanel({
@@ -20,7 +26,7 @@ export function VisualPanel({
   onClose: () => void
 }) {
   return (
-    <aside className="flex h-full w-full flex-col border-l border-border bg-background">
+    <aside className="flex h-full w-full flex-col">
       <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
         <div className="flex items-center gap-2">
           <span className="text-sm font-semibold text-foreground">
@@ -43,6 +49,9 @@ export function VisualPanel({
         <div className="[&>div]:my-0">
           {visual.kind === "mermaid" && <MermaidDiagram chart={visual.code} />}
           {visual.kind === "svg" && <SvgDiagram code={visual.code} />}
+          {visual.kind === "chart" && <ChartBlock code={visual.code} />}
+          {visual.kind === "ppt" && <PptBlock code={visual.code} compact />}
+          {visual.kind === "pdf" && <PdfBlock code={visual.code} />}
           {visual.kind === "threejs" && <ThreeDiagram code={visual.code} />}
         </div>
       </div>
