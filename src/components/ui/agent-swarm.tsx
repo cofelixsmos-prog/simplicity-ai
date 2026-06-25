@@ -1,6 +1,6 @@
 "use client"
 
-import { Loader2, Check, X, Bot } from "lucide-react"
+import { Loader2, Check, X, Bot, Maximize2 } from "lucide-react"
 import type { Step } from "@/components/ui/tool-activity"
 
 export interface AgentCard {
@@ -20,18 +20,30 @@ function StatusIcon({ status, size = 3.5 }: { status: AgentCard["status"]; size?
 }
 
 // The live "swarm" panel: one card per sub-agent, each showing its task,
-// status, the tools it used, and a short result summary when done.
-export function AgentSwarm({ agents }: { agents: AgentCard[] }) {
+// status, the tools it used, and a short result summary when done. Clicking a
+// card opens the full live control room in the side panel (via onOpen).
+export function AgentSwarm({ agents, onOpen }: { agents: AgentCard[]; onOpen?: () => void }) {
   if (agents.length === 0) return null
   return (
     <div className="mb-3 space-y-2">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-white/40">
+      <button
+        type="button"
+        onClick={onOpen}
+        className="group flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-white/40 transition-colors hover:text-white/70"
+      >
         <Bot className="size-3.5" />
         {agents.length} sub-agent{agents.length === 1 ? "" : "s"}
-      </div>
+        <Maximize2 className="size-3 opacity-0 transition-opacity group-hover:opacity-100" />
+      </button>
       <div className="grid gap-2 sm:grid-cols-2">
-        {agents.map((a) => (
-          <div key={a.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+        {agents.map((a, i) => (
+          <button
+            type="button"
+            key={a.id}
+            onClick={onOpen}
+            style={{ animationDelay: `${i * 80}ms` }}
+            className="hover-lift group/card cursor-pointer rounded-xl border border-white/10 bg-white/[0.03] p-3 text-left animate-in fade-in zoom-in-95 slide-in-from-bottom-2 duration-500 ease-out hover:border-white/25 hover:bg-white/[0.06]"
+          >
             <div className="flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-white/85">{a.name}</span>
               <StatusIcon status={a.status} />
@@ -54,7 +66,7 @@ export function AgentSwarm({ agents }: { agents: AgentCard[] }) {
                 {a.summary}
               </p>
             )}
-          </div>
+          </button>
         ))}
       </div>
     </div>

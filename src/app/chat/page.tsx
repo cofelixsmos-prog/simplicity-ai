@@ -13,6 +13,7 @@ import {
 import { MessageContent, type Visual } from "@/components/ui/message-content"
 import { ToolActivity, type Step } from "@/components/ui/tool-activity"
 import { AgentSwarm, type AgentCard } from "@/components/ui/agent-swarm"
+import { AgentPanel } from "@/components/ui/agent-panel"
 import { VisualPanel } from "@/components/ui/visual-panel"
 import { DraftCanvas, type DraftData } from "@/components/ui/draft-canvas"
 import { ReasoningAura } from "@/components/ui/reasoning-aura"
@@ -110,6 +111,8 @@ export default function ChatPage() {
   const [modelMenu, setModelMenu] = useState(false)
   const [panelVisual, setPanelVisual] = useState<Visual | null>(null)
   const [panelDraft, setPanelDraft] = useState<DraftData | null>(null)
+  // Index of the message whose sub-agents are shown (live) in the side panel.
+  const [agentPanelIdx, setAgentPanelIdx] = useState<number | null>(null)
   const [auraTrigger, setAuraTrigger] = useState(0)
   const [greeting, setGreeting] = useState("")
   const [thinking, setThinking] = useState(false)
@@ -155,6 +158,7 @@ export default function ChatPage() {
     setInput("")
     setPanelVisual(null)
     setPanelDraft(null)
+    setAgentPanelIdx(null)
   }
 
   const send = async (text: string) => {
@@ -276,6 +280,7 @@ export default function ChatPage() {
           } else if (ev.t === "draft") {
             // The agent opened/updated a draft — show it in the editable canvas.
             setPanelVisual(null)
+            setAgentPanelIdx(null)
             setPanelDraft({
               id: ev.id ?? "",
               title: ev.title ?? "Untitled draft",
@@ -395,7 +400,14 @@ export default function ChatPage() {
                             <ToolActivity steps={m.steps} />
                           )}
                           {m.agents && m.agents.length > 0 && (
-                            <AgentSwarm agents={m.agents} />
+                            <AgentSwarm
+                              agents={m.agents}
+                              onOpen={() => {
+                                setPanelDraft(null)
+                                setPanelVisual(null)
+                                setAgentPanelIdx(i)
+                              }}
+                            />
                           )}
                           {m.content ? (
                             <>
@@ -404,6 +416,7 @@ export default function ChatPage() {
                                 streaming={loading && i === messages.length - 1}
                                 onExpand={(v) => {
                                   setPanelDraft(null)
+                                  setAgentPanelIdx(null)
                                   setPanelVisual(v)
                                 }}
                                 onAnswerQuestions={(t) => handleAnswers(i, t)}
@@ -460,13 +473,13 @@ export default function ChatPage() {
         >
           {empty && (
             <div className="mb-9 flex flex-col items-center text-center">
-              <div className="text-[10px] tracking-[0.6em] text-white/25">
+              <div className="anim-rise text-[10px] tracking-[0.6em] text-white/25" style={{ ["--delay" as string]: "0ms" }}>
                 ✦ ✦ ✦
               </div>
-              <h1 className="mt-6 text-4xl font-semibold tracking-tight text-white sm:text-[44px]">
+              <h1 className="anim-rise mt-6 text-4xl font-semibold tracking-tight text-white sm:text-[44px]" style={{ ["--delay" as string]: "100ms" }}>
                 {greeting || " "}
               </h1>
-              <p className="mt-3 text-[15px] text-white/55">
+              <p className="anim-rise mt-3 text-[15px] text-white/55" style={{ ["--delay" as string]: "220ms" }}>
                 What can I help you build?
               </p>
             </div>
@@ -478,7 +491,7 @@ export default function ChatPage() {
             }}
             className={empty ? "w-full max-w-2xl" : "mx-auto w-full max-w-3xl"}
           >
-            <div className="liquid-glass flex w-full flex-col gap-2 rounded-[28px] px-4 pb-2.5 pt-3 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.6)] transition-colors focus-within:border-white/25">
+            <div className="liquid-glass flex w-full flex-col gap-2 rounded-[28px] px-4 pb-2.5 pt-3 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.6)] transition-all duration-300 ease-out focus-within:border-white/25 focus-within:shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_24px_64px_-16px_rgba(0,0,0,0.75)]">
               {/* input row */}
               <textarea
                 ref={textareaRef}
@@ -511,7 +524,7 @@ export default function ChatPage() {
                     {modelMenu && (
                       <>
                         <div className="fixed inset-0 z-10" onClick={() => setModelMenu(false)} />
-                        <div className="liquid-glass liquid-glass-soft absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-2xl p-1 shadow-2xl">
+                        <div className="liquid-glass liquid-glass-soft absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-2xl p-1 shadow-2xl animate-in fade-in zoom-in-95 slide-in-from-bottom-2 duration-200 ease-out">
                           {MODELS.map((m) => (
                             <button
                               key={m.id}
@@ -588,29 +601,30 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* ── Right side pane: draft editor takes precedence over a visual ── */}
-      {(panelDraft || panelVisual) && (
-        <div className="relative z-10 hidden w-[44%] max-w-[640px] shrink-0 p-3 md:block">
-          <div className="liquid-glass liquid-glass-soft h-full overflow-hidden rounded-2xl">
-            {panelDraft ? (
-              <DraftCanvas draft={panelDraft} onClose={() => setPanelDraft(null)} />
-            ) : panelVisual ? (
-              <VisualPanel visual={panelVisual} onClose={() => setPanelVisual(null)} />
-            ) : null}
-          </div>
-        </div>
-      )}
-
-      {/* Mobile: full-screen overlay panel */}
-      {(panelDraft || panelVisual) && (
-        <div className="fixed inset-0 z-40 bg-background/80 backdrop-blur-xl md:hidden">
-          {panelDraft ? (
-            <DraftCanvas draft={panelDraft} onClose={() => setPanelDraft(null)} />
-          ) : panelVisual ? (
-            <VisualPanel visual={panelVisual} onClose={() => setPanelVisual(null)} />
-          ) : null}
-        </div>
-      )}
+      {/* ── Right side pane: agents / draft / visual ── */}
+      {(() => {
+        const agentMsg = agentPanelIdx !== null ? messages[agentPanelIdx] : null
+        const showAgents = !!agentMsg?.agents?.length
+        const open = showAgents || !!panelDraft || !!panelVisual
+        if (!open) return null
+        const body = showAgents ? (
+          <AgentPanel agents={agentMsg!.agents!} onClose={() => setAgentPanelIdx(null)} />
+        ) : panelDraft ? (
+          <DraftCanvas draft={panelDraft} onClose={() => setPanelDraft(null)} />
+        ) : panelVisual ? (
+          <VisualPanel visual={panelVisual} onClose={() => setPanelVisual(null)} />
+        ) : null
+        return (
+          <>
+            <div className="relative z-10 hidden w-[44%] max-w-[640px] shrink-0 p-3 md:block animate-in fade-in slide-in-from-right-4 duration-500 ease-out">
+              <div className="liquid-glass liquid-glass-soft h-full overflow-hidden rounded-2xl">{body}</div>
+            </div>
+            <div className="fixed inset-0 z-40 bg-background/80 backdrop-blur-xl md:hidden animate-in fade-in slide-in-from-bottom-6 duration-300 ease-out">
+              {body}
+            </div>
+          </>
+        )
+      })()}
     </div>
   )
 }
