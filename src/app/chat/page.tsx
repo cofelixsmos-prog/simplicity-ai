@@ -13,6 +13,7 @@ import {
 import { MessageContent, type Visual } from "@/components/ui/message-content"
 import { ToolActivity, type Step } from "@/components/ui/tool-activity"
 import { VisualPanel } from "@/components/ui/visual-panel"
+import { DraftCanvas, type DraftData } from "@/components/ui/draft-canvas"
 import { ReasoningAura } from "@/components/ui/reasoning-aura"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
@@ -106,6 +107,7 @@ export default function ChatPage() {
   const [reasoning, setReasoning] = useState<Reasoning>("medium")
   const [modelMenu, setModelMenu] = useState(false)
   const [panelVisual, setPanelVisual] = useState<Visual | null>(null)
+  const [panelDraft, setPanelDraft] = useState<DraftData | null>(null)
   const [auraTrigger, setAuraTrigger] = useState(0)
   const [greeting, setGreeting] = useState("")
   const [thinking, setThinking] = useState(false)
@@ -150,6 +152,7 @@ export default function ChatPage() {
     setMessages([])
     setInput("")
     setPanelVisual(null)
+    setPanelDraft(null)
   }
 
   const send = async (text: string) => {
@@ -220,6 +223,8 @@ export default function ChatPage() {
             label?: string
             status?: Step["status"]
             detail?: string
+            title?: string
+            content?: string
           }
           try {
             ev = JSON.parse(t)
@@ -229,6 +234,14 @@ export default function ChatPage() {
 
           if (ev.t === "thinking") {
             setThinking(true)
+          } else if (ev.t === "draft") {
+            // The agent opened/updated a draft — show it in the editable canvas.
+            setPanelVisual(null)
+            setPanelDraft({
+              id: ev.id ?? "",
+              title: ev.title ?? "Untitled draft",
+              content: ev.content ?? "",
+            })
           } else if (ev.t === "text") {
             acc += ev.v ?? ""
             if (acc.trim().length > 0) setThinking(false)
@@ -347,7 +360,10 @@ export default function ChatPage() {
                               <MessageContent
                                 content={m.content}
                                 streaming={loading && i === messages.length - 1}
-                                onExpand={setPanelVisual}
+                                onExpand={(v) => {
+                                  setPanelDraft(null)
+                                  setPanelVisual(v)
+                                }}
                                 onAnswerQuestions={(t) => handleAnswers(i, t)}
                                 onApprovePlan={() => handleApprove(i)}
                                 onDenyPlan={() => handleDeny(i)}
@@ -529,19 +545,27 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* ── Right visual pane ── */}
-      {panelVisual && (
+      {/* ── Right side pane: draft editor takes precedence over a visual ── */}
+      {(panelDraft || panelVisual) && (
         <div className="relative z-10 hidden w-[44%] max-w-[640px] shrink-0 p-3 md:block">
           <div className="liquid-glass liquid-glass-soft h-full overflow-hidden rounded-2xl">
-            <VisualPanel visual={panelVisual} onClose={() => setPanelVisual(null)} />
+            {panelDraft ? (
+              <DraftCanvas draft={panelDraft} onClose={() => setPanelDraft(null)} />
+            ) : panelVisual ? (
+              <VisualPanel visual={panelVisual} onClose={() => setPanelVisual(null)} />
+            ) : null}
           </div>
         </div>
       )}
 
       {/* Mobile: full-screen overlay panel */}
-      {panelVisual && (
+      {(panelDraft || panelVisual) && (
         <div className="fixed inset-0 z-40 bg-background/80 backdrop-blur-xl md:hidden">
-          <VisualPanel visual={panelVisual} onClose={() => setPanelVisual(null)} />
+          {panelDraft ? (
+            <DraftCanvas draft={panelDraft} onClose={() => setPanelDraft(null)} />
+          ) : panelVisual ? (
+            <VisualPanel visual={panelVisual} onClose={() => setPanelVisual(null)} />
+          ) : null}
         </div>
       )}
     </div>

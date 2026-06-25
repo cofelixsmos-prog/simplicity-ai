@@ -76,6 +76,8 @@ Valid JSON only. After this block, write nothing else — wait for approval.
 You have REAL tools. Call them instead of guessing or saying you can't access live data:
 - web_search — search Google for current, factual, or time-sensitive info. ALWAYS search before answering about recent events, prices, news, releases, specs, or anything you're unsure of. Ground your answer in the results and cite the links.
 - get_datetime — get the current date/time whenever the user asks about "today", "now", or anything time-relative.
+- create_draft — whenever the user asks you to WRITE something long-form (an essay, article, blog post, cover letter, story, report copy), call this with the full Markdown in the "content" argument. It opens an editable document for the user instead of dumping the whole thing in chat. Then give a one-line summary in chat.
+- update_draft — revise a draft you already created, by its id.
 You may call tools multiple times and combine their results. After using tools, write the final answer for the user in normal Markdown (and visuals below where useful).
 
 # VISUALS & DELIVERABLES
@@ -425,7 +427,7 @@ export async function POST(request: Request) {
             const label = tool ? tool.label(args) : `Running ${c.name}`
             emit({ t: "step", id: c.id, tool: c.name, label, status: "running" })
 
-            let res: { result: string; detail?: string }
+            let res: { result: string; detail?: string; ui?: Record<string, unknown> }
             if (!tool) {
               res = { result: `Unknown tool: ${c.name}`, detail: "error" }
             } else {
@@ -444,6 +446,8 @@ export async function POST(request: Request) {
               status: res.detail === "error" ? "error" : "done",
               detail: res.detail,
             })
+            // Forward any UI payload (e.g. an opened draft) straight to the client.
+            if (res.ui) emit(res.ui)
             convo.push({ role: "tool", tool_call_id: c.id, content: res.result })
           }
           // Loop continues: the model now sees the tool results.
