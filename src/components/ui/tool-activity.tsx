@@ -22,12 +22,13 @@ export function ToolActivity({ steps }: { steps: Step[] }) {
   if (steps.length === 0) return null
   return (
     <div className="mb-3 flex flex-col gap-1.5">
-      {steps.map((s) => {
+      {steps.map((s, i) => {
         const Icon = ICONS[s.tool] ?? Wrench
         return (
           <div
             key={s.id}
-            className="flex items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] text-white/70"
+            style={{ animationDelay: `${i * 60}ms` }}
+            className="flex items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] text-white/70 animate-in fade-in slide-in-from-left-2 duration-500 ease-out"
           >
             <Icon className="size-3.5 shrink-0 text-white/45" />
             <span className="min-w-0 flex-1 truncate">{s.label}</span>

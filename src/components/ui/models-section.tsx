@@ -1,6 +1,7 @@
 "use client"
 
 import { ArrowRight } from "lucide-react"
+import { Reveal } from "@/components/ui/reveal"
 
 interface ModelSpec {
   label: string
@@ -68,7 +69,7 @@ export function ModelsSection({
       className="relative z-10 w-full bg-background py-28 sm:py-36 px-6"
     >
       <div className="mx-auto max-w-5xl">
-        <div className="mb-16 sm:mb-20 max-w-2xl">
+        <Reveal className="mb-16 sm:mb-20 max-w-2xl">
           <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground mb-5">
             Models
           </p>
@@ -80,9 +81,9 @@ export function ModelsSection({
             complexity. Choose frontier reasoning or fast, efficient
             intelligence.
           </p>
-        </div>
+        </Reveal>
 
-        <div className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border md:grid-cols-2">
+        <Reveal delay={120} className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border md:grid-cols-2">
           {models.map((model) => (
             <article
               key={model.id}
@@ -147,7 +148,7 @@ export function ModelsSection({
               </button>
             </article>
           ))}
-        </div>
+        </Reveal>
       </div>
     </section>
   )

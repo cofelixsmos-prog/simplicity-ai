@@ -179,6 +179,7 @@ export function MessageContent({
       >
         {content}
       </ReactMarkdown>
+      {streaming && <span className="streaming-caret text-foreground/50" />}
     </div>
   )
 }

@@ -34,7 +34,7 @@ export function Navbar({
 
   return (
     <header className="fixed top-5 inset-x-0 z-50 flex justify-center px-4">
-      <nav className="w-full max-w-5xl rounded-full border border-white/10 bg-black/30 backdrop-blur-2xl shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_16px_48px_-12px_rgba(0,0,0,0.5)]">
+      <nav className="w-full max-w-5xl rounded-full border border-white/10 bg-black/30 backdrop-blur-2xl shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08),0_16px_48px_-12px_rgba(0,0,0,0.5)] animate-in fade-in slide-in-from-top-4 duration-700 ease-out">
         <div className="flex items-center justify-between pl-6 pr-2.5 py-2.5">
           {/* Brand */}
           <a
@@ -51,7 +51,7 @@ export function Navbar({
               <li key={link.href}>
                 <a
                   href={link.href}
-                  className="text-[13.5px] font-medium tracking-wide text-white/60 transition-colors duration-200 hover:text-white"
+                  className="inline-block text-[13.5px] font-medium tracking-wide text-white/60 transition-all duration-200 hover:-translate-y-px hover:text-white"
                 >
                   {link.label}
                 </a>

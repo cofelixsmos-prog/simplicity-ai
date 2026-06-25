@@ -174,3 +174,112 @@
   -webkit-backdrop-filter: blur(18px) saturate(1.15);
   filter: url(#liquid-glass-filter-soft);
 }
+
+/* ── Apple-style motion system ───────────────────────────────
+   Cohesive easing + entrance / scroll-reveal / hover / press
+   animations. Everything collapses under prefers-reduced-motion. */
+@theme {
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes appleRise {
+  from { opacity: 0; transform: translateY(16px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes appleScaleIn {
+  from { opacity: 0; transform: scale(0.92); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes appleFloat {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+
+/* mount entrance — fades up with a touch of scale */
+.anim-rise {
+  opacity: 0;
+  animation: appleRise 0.7s var(--ease-out-expo) forwards;
+  animation-delay: var(--delay, 0s);
+}
+.anim-scale-in {
+  opacity: 0;
+  animation: appleScaleIn 0.5s var(--ease-spring) forwards;
+  animation-delay: var(--delay, 0s);
+}
+.anim-float { animation: appleFloat 6s var(--ease-smooth) infinite; }
+
+/* blinking "typing" caret shown at the end of streaming assistant text */
+@keyframes caretBlink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.15; }
+}
+.streaming-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  border-radius: 2px;
+  background: currentColor;
+  animation: caretBlink 1s var(--ease-smooth) infinite;
+}
+
+/* scroll reveal — hidden until IntersectionObserver adds .is-visible */
+.reveal {
+  opacity: 0;
+  transform: translateY(22px) scale(0.99);
+  transition:
+    opacity 0.7s var(--ease-out-expo),
+    transform 0.7s var(--ease-out-expo);
+  transition-delay: var(--delay, 0s);
+  will-change: opacity, transform;
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* tactile hover lift for standalone cards */
+.hover-lift {
+  transition:
+    transform 0.3s var(--ease-spring),
+    box-shadow 0.3s var(--ease-out-expo),
+    border-color 0.3s var(--ease-out-expo);
+}
+.hover-lift:hover {
+  transform: translateY(-4px);
+}
+
+/* global tactile press on tappables — the little Apple "squish" */
+@layer base {
+  button:not(:disabled),
+  [role="button"] {
+    transition: transform 0.18s var(--ease-spring);
+  }
+  button:not(:disabled):active,
+  [role="button"]:active {
+    transform: scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-rise,
+  .anim-scale-in,
+  .anim-float {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+  .hover-lift:hover,
+  button:active,
+  [role="button"]:active {
+    transform: none !important;
+  }
+}

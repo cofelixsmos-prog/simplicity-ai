@@ -68,11 +68,17 @@ export function Hero({
       </div>
 
       <div className="relative z-10 flex flex-col items-center text-center">
-        <h1 className="bg-gradient-to-b from-white to-white/55 bg-clip-text font-semibold tracking-tighter text-transparent leading-[0.95] text-6xl sm:text-8xl md:text-[8.5rem]">
+        <h1
+          className="anim-rise bg-gradient-to-b from-white to-white/55 bg-clip-text font-semibold tracking-tighter text-transparent leading-[0.95] text-6xl sm:text-8xl md:text-[8.5rem]"
+          style={{ ["--delay" as string]: "60ms" }}
+        >
           Simplicity
         </h1>
 
-        <p className="mt-8 flex flex-wrap items-baseline justify-center gap-x-3 text-2xl sm:text-4xl font-light text-white/50">
+        <p
+          className="anim-rise mt-8 flex flex-wrap items-baseline justify-center gap-x-3 text-2xl sm:text-4xl font-light text-white/50"
+          style={{ ["--delay" as string]: "200ms" }}
+        >
           <span>Intelligence,</span>
           <RotatingText
             words={words}
@@ -82,7 +88,8 @@ export function Hero({
 
         <button
           onClick={onButtonClick}
-          className="mt-14 rounded-full bg-white px-8 py-4 text-[15px] font-medium text-black transition-all duration-300 hover:shadow-[0_0_40px_-6px_rgba(255,255,255,0.6)]"
+          style={{ ["--delay" as string]: "340ms" }}
+          className="anim-rise mt-14 rounded-full bg-white px-8 py-4 text-[15px] font-medium text-black transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_0_40px_-6px_rgba(255,255,255,0.6)]"
         >
           {buttonText}
         </button>
