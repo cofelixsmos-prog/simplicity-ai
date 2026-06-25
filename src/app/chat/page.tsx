@@ -11,6 +11,7 @@ import {
   Brain,
 } from "lucide-react"
 import { MessageContent, type Visual } from "@/components/ui/message-content"
+import { ToolActivity, type Step } from "@/components/ui/tool-activity"
 import { VisualPanel } from "@/components/ui/visual-panel"
 import { ReasoningAura } from "@/components/ui/reasoning-aura"
 import { ShaderBackground } from "@/components/ui/shader-background"
@@ -20,6 +21,7 @@ import { MODELS, DEFAULT_MODEL_ID, getModel } from "@/lib/models"
 interface Message {
   role: "user" | "assistant"
   content: string
+  steps?: Step[]
 }
 
 type Reasoning = "off" | "low" | "medium" | "high"
@@ -183,37 +185,78 @@ export default function ChatPage() {
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
+      let buffer = ""
       let acc = ""
+      const steps: Step[] = []
+
+      // Replace the trailing assistant placeholder with the latest text + steps.
+      const flush = () => {
+        setMessages((m) => {
+          const copy = [...m]
+          copy[copy.length - 1] = {
+            role: "assistant",
+            content: acc,
+            steps: steps.length ? [...steps] : undefined,
+          }
+          return copy
+        })
+      }
+
+      // The server streams NDJSON events, one JSON object per line.
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        acc += decoder.decode(value, { stream: true })
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+        for (const line of lines) {
+          const t = line.trim()
+          if (!t) continue
+          let ev: {
+            t: string
+            v?: string
+            id?: string
+            tool?: string
+            label?: string
+            status?: Step["status"]
+            detail?: string
+          }
+          try {
+            ev = JSON.parse(t)
+          } catch {
+            continue
+          }
 
-        // Mid-stream failure sentinel → swap in a friendly collapse message.
-        if (acc.includes("__SIMPLICITY_COLLAPSE__")) {
-          setThinking(false)
-          const friendly = collapseMessage()
-          setMessages((m) => {
-            const copy = [...m]
-            copy[copy.length - 1] = { role: "assistant", content: friendly }
-            return copy
-          })
-          return
+          if (ev.t === "thinking") {
+            setThinking(true)
+          } else if (ev.t === "text") {
+            acc += ev.v ?? ""
+            if (acc.trim().length > 0) setThinking(false)
+            flush()
+          } else if (ev.t === "step") {
+            setThinking(false)
+            const next: Step = {
+              id: ev.id ?? "",
+              tool: ev.tool ?? "",
+              label: ev.label ?? "",
+              status: ev.status ?? "running",
+              detail: ev.detail,
+            }
+            const idx = steps.findIndex((s) => s.id === next.id)
+            if (idx >= 0) steps[idx] = next
+            else steps.push(next)
+            flush()
+          } else if (ev.t === "error") {
+            setThinking(false)
+            const friendly = collapseMessage()
+            setMessages((m) => {
+              const copy = [...m]
+              copy[copy.length - 1] = { role: "assistant", content: friendly }
+              return copy
+            })
+            return
+          }
         }
-
-        // Thinking sentinel → show the "thinking" state; strip it from content.
-        if (acc.includes("__SIMPLICITY_THINKING__")) {
-          setThinking(true)
-          acc = acc.replace(/__SIMPLICITY_THINKING__/g, "")
-        }
-        // Once real content arrives, thinking is over.
-        if (acc.trim().length > 0) setThinking(false)
-
-        setMessages((m) => {
-          const copy = [...m]
-          copy[copy.length - 1] = { role: "assistant", content: acc }
-          return copy
-        })
       }
     } catch {
       setMessages((m) => {
@@ -296,6 +339,9 @@ export default function ChatPage() {
                             <span className="text-[13px] font-semibold text-foreground">Simplicity</span>
                             <span className="font-mono text-[10px] text-muted-foreground">{model.label}</span>
                           </div>
+                          {m.steps && m.steps.length > 0 && (
+                            <ToolActivity steps={m.steps} />
+                          )}
                           {m.content ? (
                             <>
                               <MessageContent
@@ -328,7 +374,7 @@ export default function ChatPage() {
                                 Thinking…
                               </span>
                             </div>
-                          ) : (
+                          ) : m.steps && m.steps.length > 0 ? null : (
                             <div className="flex items-center gap-1.5 pt-1">
                               <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
                               <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />

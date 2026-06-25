@@ -1,4 +1,5 @@
 import { getModel, DEFAULT_MODEL_ID, type ReasoningEffort } from "@/lib/models"
+import { TOOLS, TOOL_SCHEMAS } from "@/lib/agent/tools"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -70,6 +71,12 @@ Each question has an id, q (the question), and optional options (the user can al
 }
 \`\`\`
 Valid JSON only. After this block, write nothing else — wait for approval.
+
+# TOOLS (live actions you can take)
+You have REAL tools. Call them instead of guessing or saying you can't access live data:
+- web_search — search Google for current, factual, or time-sensitive info. ALWAYS search before answering about recent events, prices, news, releases, specs, or anything you're unsure of. Ground your answer in the results and cite the links.
+- get_datetime — get the current date/time whenever the user asks about "today", "now", or anything time-relative.
+You may call tools multiple times and combine their results. After using tools, write the final answer for the user in normal Markdown (and visuals below where useful).
 
 # VISUALS & DELIVERABLES
 You can produce these. Choose the right one for the request.
@@ -268,103 +275,181 @@ export async function POST(request: Request) {
 
   const useReasoning = model.supportsReasoning && reasoning !== "off"
 
-  // Build the OpenAI-compatible request body, with provider-specific reasoning.
-  const reqBody: Record<string, unknown> = {
-    model: binding.providerModel,
-    stream: true,
-    temperature: useReasoning ? 0.6 : 0.6,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      ...messages.map((m) => ({ role: m.role, content: m.content })),
-    ],
-  }
-
-  if (binding.provider === "nvidia") {
-    // GLM uses standard OpenAI params — no special reasoning fields.
-    reqBody.top_p = 1
-    reqBody.temperature = 1
-    reqBody.max_tokens = 8192
-  } else if (binding.provider === "opencode") {
-    // OpenCode Zen (DeepSeek) is a reasoning model: thinking tokens count toward
-    // the budget before any answer, so give extra headroom for big deliverables.
-    reqBody.top_p = 1
-    reqBody.max_tokens = 16384
-  } else {
-    // groq
-    reqBody.max_tokens = useReasoning ? 4096 : 2048
-    if (useReasoning) {
-      reqBody.reasoning_effort = reasoning
-      reqBody.reasoning_format = "hidden"
+  // Per-provider tuning, applied to every turn of the agent loop.
+  function tuneBody(body: Record<string, unknown>) {
+    if (binding.provider === "nvidia") {
+      body.top_p = 1
+      body.temperature = 1
+      body.max_tokens = 8192
+    } else if (binding.provider === "opencode") {
+      // OpenCode Zen (DeepSeek) is a reasoning model: thinking tokens count
+      // toward the budget before any answer, so give extra headroom.
+      body.top_p = 1
+      body.max_tokens = 16384
+    } else {
+      // groq
+      body.max_tokens = useReasoning ? 4096 : 2048
+      if (useReasoning) {
+        body.reasoning_effort = reasoning
+        body.reasoning_format = "hidden"
+      }
     }
   }
 
-  let upstream: Response
-  try {
-    upstream = await fetch(provider.url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "text/event-stream",
-      },
-      body: JSON.stringify(reqBody),
-    })
-  } catch {
-    return new Response(JSON.stringify({ error: "upstream unreachable" }), {
-      status: 502,
-      headers: { "Content-Type": "application/json" },
-    })
-  }
-
-  if (!upstream.ok || !upstream.body) {
-    // Don't leak provider error text to the client.
-    return new Response(JSON.stringify({ error: "upstream error" }), {
-      status: 502,
-      headers: { "Content-Type": "application/json" },
-    })
-  }
+  // The running conversation the loop appends to (system + history + tool turns).
+  const convo: Record<string, unknown>[] = [
+    { role: "system", content: SYSTEM_PROMPT },
+    ...messages.map((m) => ({ role: m.role, content: m.content })),
+  ]
 
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
+  const MAX_STEPS = 6 // safety cap on tool-loop iterations
 
+  // The agent loop: stream a model turn, run any tools it calls, repeat until
+  // it produces a final answer (or we hit MAX_STEPS). Output is NDJSON events:
+  //   {t:"thinking"} | {t:"text",v} | {t:"step",id,tool,label,status,detail} | {t:"error"}
   const stream = new ReadableStream({
     async start(controller) {
-      const reader = upstream.body!.getReader()
-      let buffer = ""
-      let sentThinking = false
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
+      const emit = (ev: Record<string, unknown>) =>
+        controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"))
 
-          // Parse SSE lines: "data: {json}" terminated by blank lines.
-          const lines = buffer.split("\n")
-          buffer = lines.pop() ?? ""
-          for (const line of lines) {
-            const trimmed = line.trim()
-            if (!trimmed.startsWith("data:")) continue
-            const payload = trimmed.slice(5).trim()
-            if (payload === "[DONE]") continue
-            try {
-              const json = JSON.parse(payload)
+      try {
+        for (let step = 0; step < MAX_STEPS; step++) {
+          const reqBody: Record<string, unknown> = {
+            model: binding.providerModel,
+            stream: true,
+            temperature: 0.6,
+            messages: convo,
+            tools: TOOL_SCHEMAS,
+            tool_choice: "auto",
+          }
+          tuneBody(reqBody)
+
+          let upstream: Response
+          try {
+            upstream = await fetch(provider.url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${apiKey}`,
+                Accept: "text/event-stream",
+              },
+              body: JSON.stringify(reqBody),
+            })
+          } catch {
+            emit({ t: "error" })
+            return
+          }
+          if (!upstream.ok || !upstream.body) {
+            emit({ t: "error" })
+            return
+          }
+
+          const reader = upstream.body.getReader()
+          let buffer = ""
+          let sentThinking = false
+          let assistantText = ""
+          // Streamed tool calls are assembled by index across deltas.
+          const toolCalls: { id: string; name: string; args: string }[] = []
+
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const lines = buffer.split("\n")
+            buffer = lines.pop() ?? ""
+            for (const line of lines) {
+              const trimmed = line.trim()
+              if (!trimmed.startsWith("data:")) continue
+              const payload = trimmed.slice(5).trim()
+              if (payload === "[DONE]") continue
+              let json: { choices?: { delta?: Record<string, unknown> }[] }
+              try {
+                json = JSON.parse(payload)
+              } catch {
+                continue
+              }
               const delta = json.choices?.[0]?.delta ?? {}
-              // While the model is only producing reasoning, emit a one-time
-              // "thinking" sentinel so the UI can show a status instead of a frozen spinner.
+
+              // Reasoning-only output → show a one-time "thinking" status.
               if (!sentThinking && !delta.content && delta.reasoning_content) {
-                controller.enqueue(encoder.encode("__SIMPLICITY_THINKING__"))
+                emit({ t: "thinking" })
                 sentThinking = true
               }
-              // Only stream the final answer content (skip reasoning_content).
-              const text = delta.content
-              if (text) controller.enqueue(encoder.encode(text))
-            } catch {
-              // ignore non-JSON keepalive lines
+
+              // Assemble streamed tool-call fragments.
+              const deltaCalls = delta.tool_calls as
+                | { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
+                | undefined
+              if (Array.isArray(deltaCalls)) {
+                for (const tc of deltaCalls) {
+                  const idx = tc.index ?? 0
+                  toolCalls[idx] ??= { id: "", name: "", args: "" }
+                  if (tc.id) toolCalls[idx].id = tc.id
+                  if (tc.function?.name) toolCalls[idx].name += tc.function.name
+                  if (tc.function?.arguments) toolCalls[idx].args += tc.function.arguments
+                }
+              }
+
+              // Stream final-answer content as it arrives.
+              if (typeof delta.content === "string" && delta.content) {
+                assistantText += delta.content
+                emit({ t: "text", v: delta.content })
+              }
             }
           }
+
+          const calls = toolCalls.filter((c) => c.name)
+          if (calls.length === 0) break // no tools → final answer already streamed
+
+          // Record the assistant's tool-call turn, then run each tool.
+          convo.push({
+            role: "assistant",
+            content: assistantText || null,
+            tool_calls: calls.map((c) => ({
+              id: c.id,
+              type: "function",
+              function: { name: c.name, arguments: c.args || "{}" },
+            })),
+          })
+
+          for (const c of calls) {
+            let args: Record<string, unknown> = {}
+            try {
+              args = JSON.parse(c.args || "{}")
+            } catch {
+              /* keep empty args */
+            }
+            const tool = TOOLS[c.name]
+            const label = tool ? tool.label(args) : `Running ${c.name}`
+            emit({ t: "step", id: c.id, tool: c.name, label, status: "running" })
+
+            let res: { result: string; detail?: string }
+            if (!tool) {
+              res = { result: `Unknown tool: ${c.name}`, detail: "error" }
+            } else {
+              try {
+                res = await tool.run(args)
+              } catch {
+                res = { result: `Tool ${c.name} failed.`, detail: "error" }
+              }
+            }
+
+            emit({
+              t: "step",
+              id: c.id,
+              tool: c.name,
+              label,
+              status: res.detail === "error" ? "error" : "done",
+              detail: res.detail,
+            })
+            convo.push({ role: "tool", tool_call_id: c.id, content: res.result })
+          }
+          // Loop continues: the model now sees the tool results.
         }
       } catch {
-        controller.enqueue(encoder.encode("__SIMPLICITY_COLLAPSE__"))
+        emit({ t: "error" })
       } finally {
         controller.close()
       }
@@ -373,7 +458,7 @@ export async function POST(request: Request) {
 
   return new Response(stream, {
     headers: {
-      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Type": "application/x-ndjson; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
     },
   })
