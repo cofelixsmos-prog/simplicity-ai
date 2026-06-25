@@ -25,10 +25,23 @@ export interface ToolResult {
   ui?: Record<string, unknown> // optional event to forward straight to the client UI
 }
 
+// One assistant message from a model turn (non-streaming shape).
+export interface ModelMessage {
+  content: string | null
+  tool_calls?: { id: string; function?: { name?: string; arguments?: string } }[]
+}
+
+// Context handed to tools that need to stream events or call the model
+// themselves (e.g. spawn_agents running sub-agents).
+export interface ToolCtx {
+  emit: (ev: Record<string, unknown>) => void
+  complete: (messages: Record<string, unknown>[], tools?: ToolSchema[]) => Promise<ModelMessage>
+}
+
 interface AgentTool {
   schema: ToolSchema
   label: (args: Record<string, unknown>) => string
-  run: (args: Record<string, unknown>) => Promise<ToolResult>
+  run: (args: Record<string, unknown>, ctx?: ToolCtx) => Promise<ToolResult>
 }
 
 // ── web_search: Google Programmable Search (JSON API) ────────────────────────
@@ -120,6 +133,105 @@ async function getDatetime(): Promise<ToolResult> {
   }
 }
 
+// ── Sub-agents: spawn_agents lets the model delegate to a team of workers ────
+const SUB_MAX_STEPS = 4
+
+function subagentPrompt(name: string): string {
+  return (
+    `You are "${name}", a focused sub-agent on a team coordinated by Simplicity. ` +
+    `Complete ONLY your assigned task. Use web_search to ground facts when useful. ` +
+    `Be concise — return just your findings or result, with no preamble and no questions.`
+  )
+}
+
+interface SubAgentSpec {
+  id: string
+  name: string
+  task: string
+}
+
+async function runSubAgent(spec: SubAgentSpec, ctx: ToolCtx): Promise<string> {
+  const { id, name, task } = spec
+  ctx.emit({ t: "agent", id, name, task, status: "running" })
+
+  const convo: Record<string, unknown>[] = [
+    { role: "system", content: subagentPrompt(name) },
+    { role: "user", content: task },
+  ]
+
+  try {
+    for (let step = 0; step < SUB_MAX_STEPS; step++) {
+      const msg = await ctx.complete(convo, SUBAGENT_TOOL_SCHEMAS)
+      const calls = msg.tool_calls ?? []
+
+      if (calls.length === 0) {
+        const final = String(msg.content ?? "").trim()
+        ctx.emit({ t: "agent", id, name, task, status: "done", summary: final.slice(0, 300) })
+        return final || "(no output)"
+      }
+
+      convo.push({ role: "assistant", content: msg.content ?? null, tool_calls: calls })
+      for (const tc of calls) {
+        const stepId = tc.id
+        const toolName = tc.function?.name ?? ""
+        let a: Record<string, unknown> = {}
+        try {
+          a = JSON.parse(tc.function?.arguments || "{}")
+        } catch {
+          /* keep empty */
+        }
+        const tool = SUBAGENT_TOOLS[toolName]
+        const label = tool ? tool.label(a) : `Running ${toolName}`
+        ctx.emit({ t: "agent_step", agentId: id, id: stepId, tool: toolName, label, status: "running" })
+        const r = tool ? await tool.run(a) : { result: `Unknown tool: ${toolName}`, detail: "error" }
+        ctx.emit({
+          t: "agent_step",
+          agentId: id,
+          id: stepId,
+          tool: toolName,
+          label,
+          status: r.detail === "error" ? "error" : "done",
+          detail: r.detail,
+        })
+        convo.push({ role: "tool", tool_call_id: stepId, content: r.result })
+      }
+    }
+    ctx.emit({ t: "agent", id, name, task, status: "done", summary: "(reached step limit)" })
+    return "(reached step limit without a final answer)"
+  } catch {
+    ctx.emit({ t: "agent", id, name, task, status: "error" })
+    return `${name} hit an error.`
+  }
+}
+
+async function spawnAgents(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  const raw = Array.isArray(args.agents) ? (args.agents as Record<string, unknown>[]) : []
+  const specs: SubAgentSpec[] = raw
+    .slice(0, 4)
+    .map((s, i) => ({
+      id: randomUUID(),
+      name: String(s?.name ?? `Agent ${i + 1}`).slice(0, 40),
+      task: String(s?.task ?? "").trim(),
+    }))
+    .filter((s) => s.task)
+
+  if (!ctx) return { result: "Sub-agents are unavailable in this context.", detail: "error" }
+  if (specs.length === 0) return { result: "No valid sub-agent tasks were provided.", detail: "0 agents" }
+
+  // Run the whole team in parallel; each streams its own progress to the UI.
+  const results = await Promise.all(specs.map((s) => runSubAgent(s, ctx)))
+  const combined = specs
+    .map((s, i) => `### ${s.name}\nTask: ${s.task}\nResult:\n${results[i]}`)
+    .join("\n\n")
+
+  return {
+    result:
+      `All ${specs.length} sub-agents have finished. Synthesize their findings into one clear, ` +
+      `well-organized answer for the user:\n\n${combined}`,
+    detail: `${specs.length} agents`,
+  }
+}
+
 export const TOOLS: Record<string, AgentTool> = {
   web_search: {
     schema: {
@@ -197,6 +309,50 @@ export const TOOLS: Record<string, AgentTool> = {
     label: (a) => `Revising draft ${String(a.id ?? "").slice(0, 8)}`,
     run: updateDraft,
   },
+  spawn_agents: {
+    schema: {
+      type: "function",
+      function: {
+        name: "spawn_agents",
+        description:
+          "Delegate a BIG, multi-part task to a team of focused sub-agents that run in parallel. " +
+          "YOU decide how many to spawn (1–4), name each one, and give each a clear, self-contained task. " +
+          "Use this for research with several distinct angles, or work that splits into independent parts. " +
+          "Each sub-agent can search the web. After they finish you will receive their results to synthesize.",
+        parameters: {
+          type: "object",
+          properties: {
+            agents: {
+              type: "array",
+              description: "The sub-agents to spawn (1–4).",
+              items: {
+                type: "object",
+                properties: {
+                  name: { type: "string", description: "A short name for this sub-agent, e.g. \"Market Researcher\"." },
+                  task: { type: "string", description: "The specific, self-contained task for this sub-agent." },
+                },
+                required: ["name", "task"],
+              },
+            },
+          },
+          required: ["agents"],
+        },
+      },
+    },
+    label: (a) => {
+      const n = Array.isArray(a.agents) ? a.agents.length : 0
+      return `Spawning ${n} sub-agent${n === 1 ? "" : "s"}`
+    },
+    run: spawnAgents,
+  },
 }
 
 export const TOOL_SCHEMAS = Object.values(TOOLS).map((t) => t.schema)
+
+// Tools available to sub-agents — a research subset. Deliberately excludes
+// spawn_agents (no recursion) and create_draft (drafts are a parent deliverable).
+const SUBAGENT_TOOLS: Record<string, AgentTool> = {
+  web_search: TOOLS.web_search,
+  get_datetime: TOOLS.get_datetime,
+}
+const SUBAGENT_TOOL_SCHEMAS = Object.values(SUBAGENT_TOOLS).map((t) => t.schema)

@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import { MessageContent, type Visual } from "@/components/ui/message-content"
 import { ToolActivity, type Step } from "@/components/ui/tool-activity"
+import { AgentSwarm, type AgentCard } from "@/components/ui/agent-swarm"
 import { VisualPanel } from "@/components/ui/visual-panel"
 import { DraftCanvas, type DraftData } from "@/components/ui/draft-canvas"
 import { ReasoningAura } from "@/components/ui/reasoning-aura"
@@ -23,6 +24,7 @@ interface Message {
   role: "user" | "assistant"
   content: string
   steps?: Step[]
+  agents?: AgentCard[]
 }
 
 type Reasoning = "off" | "low" | "medium" | "high"
@@ -191,8 +193,9 @@ export default function ChatPage() {
       let buffer = ""
       let acc = ""
       const steps: Step[] = []
+      const agents: AgentCard[] = []
 
-      // Replace the trailing assistant placeholder with the latest text + steps.
+      // Replace the trailing assistant placeholder with the latest text/steps/agents.
       const flush = () => {
         setMessages((m) => {
           const copy = [...m]
@@ -200,6 +203,7 @@ export default function ChatPage() {
             role: "assistant",
             content: acc,
             steps: steps.length ? [...steps] : undefined,
+            agents: agents.length ? agents.map((a) => ({ ...a, steps: [...a.steps] })) : undefined,
           }
           return copy
         })
@@ -225,6 +229,10 @@ export default function ChatPage() {
             detail?: string
             title?: string
             content?: string
+            name?: string
+            task?: string
+            summary?: string
+            agentId?: string
           }
           try {
             ev = JSON.parse(t)
@@ -234,6 +242,37 @@ export default function ChatPage() {
 
           if (ev.t === "thinking") {
             setThinking(true)
+          } else if (ev.t === "agent") {
+            // A sub-agent's lifecycle: spawned / finished / errored.
+            setThinking(false)
+            const i = agents.findIndex((a) => a.id === ev.id)
+            const card: AgentCard = {
+              id: ev.id ?? "",
+              name: ev.name ?? "Agent",
+              task: ev.task ?? (i >= 0 ? agents[i].task : ""),
+              status: ev.status ?? "running",
+              steps: i >= 0 ? agents[i].steps : [],
+              summary: ev.summary ?? (i >= 0 ? agents[i].summary : undefined),
+            }
+            if (i >= 0) agents[i] = card
+            else agents.push(card)
+            flush()
+          } else if (ev.t === "agent_step") {
+            // A tool step inside a specific sub-agent.
+            const ai = agents.findIndex((a) => a.id === ev.agentId)
+            if (ai >= 0) {
+              const st: Step = {
+                id: ev.id ?? "",
+                tool: ev.tool ?? "",
+                label: ev.label ?? "",
+                status: ev.status ?? "running",
+                detail: ev.detail,
+              }
+              const si = agents[ai].steps.findIndex((s) => s.id === st.id)
+              if (si >= 0) agents[ai].steps[si] = st
+              else agents[ai].steps.push(st)
+              flush()
+            }
           } else if (ev.t === "draft") {
             // The agent opened/updated a draft — show it in the editable canvas.
             setPanelVisual(null)
@@ -355,6 +394,9 @@ export default function ChatPage() {
                           {m.steps && m.steps.length > 0 && (
                             <ToolActivity steps={m.steps} />
                           )}
+                          {m.agents && m.agents.length > 0 && (
+                            <AgentSwarm agents={m.agents} />
+                          )}
                           {m.content ? (
                             <>
                               <MessageContent
@@ -390,7 +432,8 @@ export default function ChatPage() {
                                 Thinking…
                               </span>
                             </div>
-                          ) : m.steps && m.steps.length > 0 ? null : (
+                          ) : (m.steps && m.steps.length > 0) ||
+                            (m.agents && m.agents.length > 0) ? null : (
                             <div className="flex items-center gap-1.5 pt-1">
                               <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
                               <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />

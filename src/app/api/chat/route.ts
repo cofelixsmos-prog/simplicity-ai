@@ -1,5 +1,5 @@
 import { getModel, DEFAULT_MODEL_ID, type ReasoningEffort } from "@/lib/models"
-import { TOOLS, TOOL_SCHEMAS } from "@/lib/agent/tools"
+import { TOOLS, TOOL_SCHEMAS, type ToolCtx, type ToolSchema, type ModelMessage } from "@/lib/agent/tools"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -78,6 +78,7 @@ You have REAL tools. Call them instead of guessing or saying you can't access li
 - get_datetime — get the current date/time whenever the user asks about "today", "now", or anything time-relative.
 - create_draft — whenever the user asks you to WRITE something long-form (an essay, article, blog post, cover letter, story, report copy), call this with the full Markdown in the "content" argument. It opens an editable document for the user instead of dumping the whole thing in chat. Then give a one-line summary in chat.
 - update_draft — revise a draft you already created, by its id.
+- spawn_agents — for a BIG task with several independent parts (multi-angle research, a report that splits into sections, "compare X, Y and Z"), delegate to a team of sub-agents that run in parallel. YOU decide how many (1–4), name each, and give each a clear self-contained task. Each can search the web. When they finish you'll get their results — synthesize them into one answer. Don't spawn agents for small or single-step requests; just answer those yourself.
 You may call tools multiple times and combine their results. After using tools, write the final answer for the user in normal Markdown (and visuals below where useful).
 
 # VISUALS & DELIVERABLES
@@ -304,6 +305,34 @@ export async function POST(request: Request) {
     ...messages.map((m) => ({ role: m.role, content: m.content })),
   ]
 
+  // One non-streaming model turn — used by sub-agents via the tool context.
+  async function complete(
+    msgs: Record<string, unknown>[],
+    tools?: ToolSchema[]
+  ): Promise<ModelMessage> {
+    const body: Record<string, unknown> = {
+      model: binding.providerModel,
+      stream: false,
+      temperature: 0.6,
+      messages: msgs,
+    }
+    if (tools) {
+      body.tools = tools
+      body.tool_choice = "auto"
+    }
+    tuneBody(body)
+    const r = await fetch(provider.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+    })
+    const j = (await r.json()) as {
+      choices?: { message?: ModelMessage }[]
+    }
+    const msg = j?.choices?.[0]?.message
+    return { content: msg?.content ?? null, tool_calls: msg?.tool_calls }
+  }
+
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
   const MAX_STEPS = 6 // safety cap on tool-loop iterations
@@ -315,6 +344,7 @@ export async function POST(request: Request) {
     async start(controller) {
       const emit = (ev: Record<string, unknown>) =>
         controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"))
+      const toolCtx: ToolCtx = { emit, complete }
 
       try {
         for (let step = 0; step < MAX_STEPS; step++) {
@@ -432,7 +462,7 @@ export async function POST(request: Request) {
               res = { result: `Unknown tool: ${c.name}`, detail: "error" }
             } else {
               try {
-                res = await tool.run(args)
+                res = await tool.run(args, toolCtx)
               } catch {
                 res = { result: `Tool ${c.name} failed.`, detail: "error" }
               }
