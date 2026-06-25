@@ -3,7 +3,6 @@
 import { MeshGradient } from "@paper-design/shaders-react"
 import { useEffect, useState } from "react"
 import { RotatingText } from "@/components/ui/rotating-text"
-import { MadeIn } from "@/components/ui/made-in"
 
 interface HeroProps {
   words?: string[]
@@ -69,11 +68,6 @@ export function Hero({
       </div>
 
       <div className="relative z-10 flex flex-col items-center text-center">
-        <span className="mb-8 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-1.5 text-[12.5px] font-medium tracking-wide text-white/70 backdrop-blur-md">
-          <span className="size-1.5 rounded-full bg-white/80" />
-          India&apos;s second AI, after Sarvam
-        </span>
-
         <h1 className="bg-gradient-to-b from-white to-white/55 bg-clip-text font-semibold tracking-tighter text-transparent leading-[0.95] text-6xl sm:text-8xl md:text-[8.5rem]">
           Simplicity
         </h1>
@@ -92,10 +86,6 @@ export function Hero({
         >
           {buttonText}
         </button>
-
-        <div className="mt-8">
-          <MadeIn />
-        </div>
       </div>
     </section>
   )

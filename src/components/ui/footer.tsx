@@ -15,14 +15,6 @@ export function Footer({ brand = "Simplicity" }: FooterProps) {
           <span className="size-1.5 rounded-full bg-white/80" />
           {brand}
         </div>
-
-        <p className="text-sm text-muted-foreground">
-          India&apos;s second AI, after Sarvam.
-        </p>
-
-        <p className="text-sm text-muted-foreground">
-          Made for India <span className="text-foreground">✦</span>
-        </p>
       </div>
     </footer>
   )
