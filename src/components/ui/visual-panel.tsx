@@ -8,6 +8,7 @@ import { ThreeDiagram } from "@/components/ui/three-diagram"
 import { ChartBlock } from "@/components/ui/chart-block"
 import { PptBlock } from "@/components/ui/ppt-block"
 import { PdfBlock } from "@/components/ui/pdf-block"
+import { ExcelBlock } from "@/components/ui/excel-block"
 
 const LABELS: Record<Visual["kind"], string> = {
   mermaid: "Flowchart",
@@ -16,6 +17,7 @@ const LABELS: Record<Visual["kind"], string> = {
   chart: "Chart",
   ppt: "Presentation",
   pdf: "Document",
+  excel: "Spreadsheet",
 }
 
 export function VisualPanel({
@@ -52,6 +54,7 @@ export function VisualPanel({
           {visual.kind === "chart" && <ChartBlock code={visual.code} />}
           {visual.kind === "ppt" && <PptBlock code={visual.code} compact />}
           {visual.kind === "pdf" && <PdfBlock code={visual.code} />}
+          {visual.kind === "excel" && <ExcelBlock code={visual.code} compact />}
           {visual.kind === "threejs" && <ThreeDiagram code={visual.code} />}
         </div>
       </div>

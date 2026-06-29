@@ -10,15 +10,16 @@ import { ThreeDiagram } from "@/components/ui/three-diagram"
 import { ChartBlock } from "@/components/ui/chart-block"
 import { PptBlock } from "@/components/ui/ppt-block"
 import { PdfBlock } from "@/components/ui/pdf-block"
+import { ExcelBlock } from "@/components/ui/excel-block"
 import { QuestionsBlock } from "@/components/ui/questions-block"
 import { PlanBlock } from "@/components/ui/plan-block"
 
 export type Visual = {
-  kind: "mermaid" | "svg" | "threejs" | "chart" | "ppt" | "pdf"
+  kind: "mermaid" | "svg" | "threejs" | "chart" | "ppt" | "pdf" | "excel"
   code: string
 }
 
-const EXPANDABLE = new Set(["mermaid", "svg", "threejs", "chart", "ppt", "pdf"])
+const EXPANDABLE = new Set(["mermaid", "svg", "threejs", "chart", "ppt", "pdf", "excel"])
 
 function VisualBlock({
   visual,
@@ -40,6 +41,8 @@ function VisualBlock({
       <PptBlock code={visual.code} streaming={streaming} />
     ) : visual.kind === "pdf" ? (
       <PdfBlock code={visual.code} streaming={streaming} />
+    ) : visual.kind === "excel" ? (
+      <ExcelBlock code={visual.code} streaming={streaming} />
     ) : (
       <ThreeDiagram code={visual.code} streaming={streaming} />
     )

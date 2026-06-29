@@ -9,6 +9,15 @@ import {
   Plus,
   ChevronDown,
   Brain,
+  Sparkles,
+  Network,
+  PenLine,
+  Presentation,
+  Cpu,
+  Home,
+  Code2,
+  BookOpen,
+  Command as CommandIcon,
 } from "lucide-react"
 import { MessageContent, type Visual } from "@/components/ui/message-content"
 import { ToolActivity, type Step } from "@/components/ui/tool-activity"
@@ -16,6 +25,8 @@ import { AgentSwarm, type AgentCard } from "@/components/ui/agent-swarm"
 import { AgentPanel } from "@/components/ui/agent-panel"
 import { VisualPanel } from "@/components/ui/visual-panel"
 import { DraftCanvas, type DraftData } from "@/components/ui/draft-canvas"
+import { CommandPalette, type Command } from "@/components/ui/command-palette"
+import { ChatSidebar, type ConvoLite } from "@/components/ui/chat-sidebar"
 import { ReasoningAura } from "@/components/ui/reasoning-aura"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
@@ -119,10 +130,33 @@ export default function ChatPage() {
   // Track which assistant message indices have had their questions answered / plan decided.
   const [answeredIdx, setAnsweredIdx] = useState<Set<number>>(new Set())
   const [planDecisions, setPlanDecisions] = useState<Record<number, "approved" | "denied">>({})
+  // Auth + chat history
+  const [user, setUser] = useState<{ email: string; name: string | null } | null | undefined>(undefined)
+  const [conversations, setConversations] = useState<ConvoLite[]>([])
+  const [conversationId, setConversationId] = useState<string | null>(null)
 
   // Compute greeting on the client only (avoids SSR/hydration mismatch).
   useEffect(() => {
     setGreeting(getGreeting())
+  }, [])
+
+  // Require auth; load the user and their conversations.
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const res = await fetch("/api/auth/me")
+        const d = await res.json()
+        if (!d.user) {
+          window.location.href = "/login"
+          return
+        }
+        setUser({ email: d.user.email, name: d.user.name })
+        const cr = await fetch("/api/conversations")
+        if (cr.ok) setConversations((await cr.json()).conversations ?? [])
+      } catch {
+        window.location.href = "/login"
+      }
+    })()
   }, [])
 
   // Fire the activation flash when "high" reasoning is selected.
@@ -159,6 +193,48 @@ export default function ChatPage() {
     setPanelVisual(null)
     setPanelDraft(null)
     setAgentPanelIdx(null)
+    setConversationId(null)
+  }
+
+  const refreshConversations = async () => {
+    try {
+      const r = await fetch("/api/conversations")
+      if (r.ok) setConversations((await r.json()).conversations ?? [])
+    } catch {}
+  }
+
+  const loadConversation = async (id: string) => {
+    if (loading) return
+    setPanelVisual(null)
+    setPanelDraft(null)
+    setAgentPanelIdx(null)
+    try {
+      const res = await fetch(`/api/conversations/${id}`)
+      if (!res.ok) return
+      const d = await res.json()
+      setMessages(
+        (d.messages ?? []).map((m: { role: "user" | "assistant"; content: string }) => ({
+          role: m.role,
+          content: m.content,
+        }))
+      )
+      setConversationId(id)
+    } catch {}
+  }
+
+  const deleteConvo = async (id: string) => {
+    try {
+      await fetch(`/api/conversations/${id}`, { method: "DELETE" })
+    } catch {}
+    setConversations((c) => c.filter((x) => x.id !== id))
+    if (conversationId === id) reset()
+  }
+
+  const logout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" })
+    } catch {}
+    window.location.href = "/login"
   }
 
   const send = async (text: string) => {
@@ -171,6 +247,30 @@ export default function ChatPage() {
     setLoading(true)
     setThinking(false)
     setMessages((m) => [...m, { role: "assistant", content: "" }])
+
+    // Ensure a conversation exists, then persist the user message (best-effort).
+    let convoId = conversationId
+    if (!convoId) {
+      try {
+        const cr = await fetch("/api/conversations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: trimmed.slice(0, 60) }),
+        })
+        if (cr.ok) {
+          const cd = await cr.json()
+          convoId = cd.conversation.id
+          setConversationId(convoId)
+          setConversations((c) => [cd.conversation, ...c])
+        }
+      } catch {}
+    }
+    if (convoId)
+      fetch(`/api/conversations/${convoId}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "user", content: trimmed }),
+      }).catch(() => {})
 
     try {
       const res = await fetch("/api/chat", {
@@ -315,6 +415,17 @@ export default function ChatPage() {
           }
         }
       }
+
+      // Persist the assistant's final answer, then refresh the sidebar order.
+      if (convoId && acc.trim()) {
+        fetch(`/api/conversations/${convoId}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role: "assistant", content: acc }),
+        })
+          .then(() => refreshConversations())
+          .catch(() => {})
+      }
     } catch {
       setMessages((m) => {
         const copy = [...m]
@@ -341,7 +452,87 @@ export default function ChatPage() {
     send("[User denied the plan] Please ask what to change.")
   }
 
+  // Prefill the composer with a starter prompt and focus it (used by ⌘K).
+  const prefill = (text: string) => {
+    setInput(text)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(text.length, text.length)
+      }
+    })
+  }
+
+  // ⌘K command palette commands.
+  const commands: Command[] = [
+    { id: "new", group: "Actions", label: "New chat", icon: Plus, keywords: "reset clear", run: reset },
+    {
+      id: "p-ppt",
+      group: "Start",
+      label: "Make a presentation",
+      icon: Presentation,
+      keywords: "ppt deck slides",
+      run: () => prefill("Make a professional presentation about "),
+    },
+    {
+      id: "p-research",
+      group: "Start",
+      label: "Research with sub-agents",
+      icon: Network,
+      keywords: "agents swarm search",
+      run: () => prefill("Research the following using sub-agents: "),
+    },
+    {
+      id: "p-essay",
+      group: "Start",
+      label: "Write an essay / draft",
+      icon: PenLine,
+      keywords: "write document draft",
+      run: () => prefill("Write an essay about "),
+    },
+    {
+      id: "p-diagram",
+      group: "Start",
+      label: "Create a diagram",
+      icon: Sparkles,
+      keywords: "flowchart mermaid chart svg",
+      run: () => prefill("Create a diagram of "),
+    },
+    ...MODELS.map((m) => ({
+      id: `model-${m.id}`,
+      group: "Model",
+      label: `Use ${m.name}`,
+      icon: Cpu,
+      hint: m.id === modelId ? "active" : m.label,
+      keywords: `${m.label} ${m.description}`,
+      run: () => setModelId(m.id),
+    })),
+    ...(model.supportsReasoning
+      ? (["off", "low", "medium", "high"] as Reasoning[]).map((r) => ({
+          id: `reason-${r}`,
+          group: "Reasoning",
+          label: `Reasoning: ${r}`,
+          icon: Brain,
+          hint: reasoning === r ? "active" : undefined,
+          run: () => chooseReasoning(r),
+        }))
+      : []),
+    { id: "go-home", group: "Go to", label: "Home", icon: Home, run: () => (window.location.href = "/") },
+    { id: "go-dev", group: "Go to", label: "Developers", icon: Code2, run: () => (window.location.href = "/developers") },
+    { id: "go-res", group: "Go to", label: "Resources", icon: BookOpen, run: () => (window.location.href = "/resources") },
+  ]
+
   const empty = messages.length === 0
+
+  // While auth resolves, show a minimal loader (redirects to /login if signed out).
+  if (user === undefined) {
+    return (
+      <div className="flex h-dvh items-center justify-center bg-background">
+        <Loader2 className="size-5 animate-spin text-white/40" />
+      </div>
+    )
+  }
 
   return (
     <div className="relative flex h-dvh">
@@ -349,8 +540,22 @@ export default function ChatPage() {
       <ShaderBackground fixed />
       <LiquidGlassFilters />
 
+      {/* ⌘K command palette */}
+      <CommandPalette commands={commands} />
+
       {/* Apple-Intelligence-style activation flash when "high" is selected */}
       <ReasoningAura trigger={auraTrigger} />
+
+      {/* ── Conversation history sidebar ── */}
+      <ChatSidebar
+        conversations={conversations}
+        activeId={conversationId}
+        userEmail={user?.email}
+        onSelect={loadConversation}
+        onNew={reset}
+        onDelete={deleteConvo}
+        onLogout={logout}
+      />
 
       {/* ── Chat column ── */}
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">
@@ -363,16 +568,27 @@ export default function ChatPage() {
             <span className="size-1.5 rounded-full bg-white/80" />
             Simplicity
           </a>
-          {!empty && (
+          <div className="flex items-center gap-1.5">
             <button
-              onClick={reset}
-              aria-label="New chat"
-              title="New chat"
-              className="pointer-events-auto inline-flex size-9 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+              onClick={() => window.dispatchEvent(new Event("open-cmdk"))}
+              aria-label="Open command palette"
+              title="Command palette"
+              className="pointer-events-auto inline-flex items-center gap-1 rounded-full border border-white/10 px-2.5 py-1.5 text-[11px] font-medium text-white/50 transition-colors hover:bg-white/10 hover:text-white"
             >
-              <Plus className="size-4" />
+              <CommandIcon className="size-3.5" />
+              <span className="font-mono">K</span>
             </button>
-          )}
+            {!empty && (
+              <button
+                onClick={reset}
+                aria-label="New chat"
+                title="New chat"
+                className="pointer-events-auto inline-flex size-9 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <Plus className="size-4" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Messages (only once a conversation has started) */}

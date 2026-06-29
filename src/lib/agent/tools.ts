@@ -64,8 +64,10 @@ async function webSearch(args: Record<string, unknown>): Promise<ToolResult> {
     `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(key)}` +
     `&cx=${encodeURIComponent(cx)}&num=5&q=${encodeURIComponent(query)}`
 
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 15_000)
   try {
-    const res = await fetch(url)
+    const res = await fetch(url, { signal: ctrl.signal })
     if (!res.ok) return { result: `Search failed (HTTP ${res.status}).`, detail: "error" }
     const data = (await res.json()) as { items?: { title?: string; link?: string; snippet?: string }[] }
     const items = data.items ?? []
@@ -81,7 +83,9 @@ async function webSearch(args: Record<string, unknown>): Promise<ToolResult> {
       detail: `${items.length} results`,
     }
   } catch {
-    return { result: "The search request failed to reach Google.", detail: "error" }
+    return { result: "The search request timed out or failed to reach Google.", detail: "error" }
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -134,7 +138,8 @@ async function getDatetime(): Promise<ToolResult> {
 }
 
 // ── Sub-agents: spawn_agents lets the model delegate to a team of workers ────
-const SUB_MAX_STEPS = 4
+const SUB_MAX_STEPS = 3
+const MAX_SUBAGENTS = 3 // parallel cap — bounds memory/concurrency on small instances
 
 function subagentPrompt(name: string): string {
   return (
@@ -207,7 +212,7 @@ async function runSubAgent(spec: SubAgentSpec, ctx: ToolCtx): Promise<string> {
 async function spawnAgents(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
   const raw = Array.isArray(args.agents) ? (args.agents as Record<string, unknown>[]) : []
   const specs: SubAgentSpec[] = raw
-    .slice(0, 4)
+    .slice(0, MAX_SUBAGENTS)
     .map((s, i) => ({
       id: randomUUID(),
       name: String(s?.name ?? `Agent ${i + 1}`).slice(0, 40),
@@ -316,7 +321,7 @@ export const TOOLS: Record<string, AgentTool> = {
         name: "spawn_agents",
         description:
           "Delegate a BIG, multi-part task to a team of focused sub-agents that run in parallel. " +
-          "YOU decide how many to spawn (1–4), name each one, and give each a clear, self-contained task. " +
+          "YOU decide how many to spawn (1–3), name each one, and give each a clear, self-contained task. " +
           "Use this for research with several distinct angles, or work that splits into independent parts. " +
           "Each sub-agent can search the web. After they finish you will receive their results to synthesize.",
         parameters: {
@@ -324,7 +329,7 @@ export const TOOLS: Record<string, AgentTool> = {
           properties: {
             agents: {
               type: "array",
-              description: "The sub-agents to spawn (1–4).",
+              description: "The sub-agents to spawn (1–3).",
               items: {
                 type: "object",
                 properties: {

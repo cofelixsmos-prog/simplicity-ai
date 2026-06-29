@@ -1,8 +1,21 @@
 import { getModel, DEFAULT_MODEL_ID, type ReasoningEffort } from "@/lib/models"
 import { TOOLS, TOOL_SCHEMAS, type ToolCtx, type ToolSchema, type ModelMessage } from "@/lib/agent/tools"
+import { corsHeaders, jsonResponse, preflight, clientIp, rateLimit } from "@/lib/api/http"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
+
+// Hardening limits.
+const CHAT_RATE_LIMIT = 20 // requests…
+const CHAT_RATE_WINDOW = 60_000 // …per minute, per IP
+const MAX_MESSAGES = 40 // history turns kept
+const MAX_TOTAL_CHARS = 120_000 // total input size cap
+const TURN_TIMEOUT_MS = 90_000 // per streaming model turn
+const COMPLETE_TIMEOUT_MS = 60_000 // per sub-agent (non-streaming) call
+
+export function OPTIONS(request: Request) {
+  return preflight(request)
+}
 
 type Provider = "groq" | "nvidia" | "opencode"
 
@@ -78,7 +91,7 @@ You have REAL tools. Call them instead of guessing or saying you can't access li
 - get_datetime — get the current date/time whenever the user asks about "today", "now", or anything time-relative.
 - create_draft — whenever the user asks you to WRITE something long-form (an essay, article, blog post, cover letter, story, report copy), call this with the full Markdown in the "content" argument. It opens an editable document for the user instead of dumping the whole thing in chat. Then give a one-line summary in chat.
 - update_draft — revise a draft you already created, by its id.
-- spawn_agents — for a BIG task with several independent parts (multi-angle research, a report that splits into sections, "compare X, Y and Z"), delegate to a team of sub-agents that run in parallel. YOU decide how many (1–4), name each, and give each a clear self-contained task. Each can search the web. When they finish you'll get their results — synthesize them into one answer. Don't spawn agents for small or single-step requests; just answer those yourself.
+- spawn_agents — for a BIG task with several independent parts (multi-angle research, a report that splits into sections, "compare X, Y and Z"), delegate to a team of sub-agents that run in parallel. YOU decide how many (1–3), name each, and give each a clear self-contained task. Each can search the web. When they finish you'll get their results — synthesize them into one answer. Don't spawn agents for small or single-step requests; just answer those yourself.
 You may call tools multiple times and combine their results. After using tools, write the final answer for the user in normal Markdown (and visuals below where useful).
 
 # VISUALS & DELIVERABLES
@@ -210,34 +223,85 @@ scene.add(g);
 \`\`\`
 
 ## 5. Presentations → PPT JSON
-When the user wants a presentation / slide deck / PPT, output a fenced block tagged \`ppt\` with JSON. It renders as a live slide preview and a Download .pptx button.
+When the user wants a presentation / slide deck / PPT, output a fenced block tagged \`ppt\` with JSON. It renders as a live preview and a Download .pptx button, and exports a polished, professional deck.
+
+DESIGN A REAL DECK — not a wall of bullet text:
+- Set a "theme": "light" (recommended for professional/corporate), "dark", or "navy". Pick an "accent" hex color (no "#") that fits the topic — e.g. "2563EB" blue (corporate/tech), "059669" green (finance/sustainability), "DC2626" red (urgent), "7C3AED" purple (creative), "EA580C" orange (energy).
+- OPEN with a "title" cover slide. Use "section" divider slides (with an "eyebrow" like "01") to break the deck into parts.
+- VARY the layouts so it breathes: "agenda" (a numbered outline, great right after the cover), "content" (bullets, optional chart), "columns" (two-up compare), "metrics" (2–4 big stat callouts — great for an at-a-glance slide), "quote" (a punchy quote + attribution), and "section" dividers.
+- END with a "closing" slide (a thank-you / call-to-action / contact).
+- Keep bullets SHORT: max ~6 per slide, one line each. Let metrics, quotes and charts carry weight instead of dense text.
+- Add an "eyebrow" (a short kicker label like a category or number) to content/metrics slides for a polished, magazine-style header.
 \`\`\`ppt
 {
   "title": "Q3 Sales Review",
+  "subtitle": "Leadership briefing",
+  "theme": "light",
+  "accent": "2563EB",
   "slides": [
-    { "title": "Q3 Sales Review", "subtitle": "Prepared for the leadership team", "layout": "title" },
-    { "title": "Highlights", "bullets": ["Revenue up 18% QoQ", "APAC fastest growing region", "Churn down to 3.1%"] },
-    { "title": "Revenue by Quarter", "bullets": ["Steady upward trend", "Q3 best on record"], "chart": { "type": "bar", "labels": ["Q1","Q2","Q3"], "datasets": [{ "label": "Revenue", "data": [120, 145, 171] }] } },
-    { "title": "Next Steps", "bullets": ["Expand APAC team", "Launch tier-2 plan"] }
+    { "layout": "title", "title": "Q3 Sales Review", "subtitle": "Prepared for the leadership team" },
+    { "layout": "section", "eyebrow": "01", "title": "Performance" },
+    { "layout": "metrics", "title": "The quarter at a glance", "metrics": [
+      { "value": "+18%", "label": "Revenue QoQ" },
+      { "value": "3.1%", "label": "Churn rate" },
+      { "value": "1,240", "label": "New customers" }
+    ] },
+    { "layout": "content", "title": "Highlights", "bullets": ["APAC fastest-growing region", "Enterprise tier launched", "NPS up to 62"],
+      "chart": { "type": "bar", "labels": ["Q1","Q2","Q3"], "datasets": [{ "label": "Revenue", "data": [120, 145, 171] }] } },
+    { "layout": "columns", "title": "What worked vs. what to fix", "columns": [
+      { "heading": "Worked", "bullets": ["APAC expansion", "Self-serve onboarding"] },
+      { "heading": "To fix", "bullets": ["Long sales cycle", "Tier-2 pricing"] }
+    ] },
+    { "layout": "quote", "quote": "Simplicity scaled with us instead of slowing us down.", "attribution": "VP Engineering, Acme" },
+    { "layout": "content", "title": "Next steps", "bullets": ["Expand the APAC team", "Ship the tier-2 plan", "Automate onboarding"] },
+    { "layout": "closing", "title": "Thank you", "subtitle": "Questions? sales@simplicity.ai" }
   ]
 }
 \`\`\`
-Rules: valid JSON. Each slide has a title and optionally subtitle, bullets (array), layout ("title" for the cover), and an optional chart (same shape as the chart block). Aim for the number of slides the user asked for.
+Rules: valid JSON. Every slide needs a "layout". title/section/closing use title (+ subtitle or eyebrow); agenda uses items[] (a string array); content uses bullets (+ optional chart); columns uses columns[] of {heading, bullets}; metrics uses metrics[] of {value, label}; quote uses quote (+ attribution). Aim for the number of slides the user asked for.
 
 ## 6. Documents → PDF JSON
-When the user wants a PDF / report / document, output a fenced block tagged \`pdf\` with JSON. It renders as a preview and a Download .pdf button.
+When the user wants a PDF / report / document, output a fenced block tagged \`pdf\` with JSON. It renders a polished, professional document with a Download .pdf button.
+- Add a "subtitle" and an "accent" hex color (no "#") to brand it.
+- Block types: "heading" (optional "level": 1 or 2), "paragraph", "list" (items[], optional "ordered": true for numbered), "table" (columns[] + rows[][]), "callout" (a highlighted key note), "divider".
+- Structure it with headings, put any data in a "table", and pull out key takeaways as "callout" — don't just stack paragraphs.
 \`\`\`pdf
 {
   "title": "Market Analysis Report",
+  "subtitle": "Q3 2026 — prepared by Simplicity",
+  "accent": "2563EB",
   "blocks": [
-    { "type": "heading", "text": "Executive Summary" },
-    { "type": "paragraph", "text": "This report summarizes..." },
-    { "type": "heading", "text": "Findings" },
-    { "type": "list", "items": ["Finding one", "Finding two"] }
+    { "type": "heading", "text": "Executive Summary", "level": 1 },
+    { "type": "paragraph", "text": "This report summarizes the Q3 market landscape and our position." },
+    { "type": "callout", "text": "Revenue grew 18% QoQ, led by the APAC region." },
+    { "type": "heading", "text": "Key Metrics", "level": 2 },
+    { "type": "table", "columns": ["Metric", "Q2", "Q3"], "rows": [["Revenue", "120", "171"], ["Churn", "4.0%", "3.1%"]] },
+    { "type": "heading", "text": "Next Steps", "level": 2 },
+    { "type": "list", "ordered": true, "items": ["Expand the APAC team", "Launch the tier-2 plan"] }
   ]
 }
 \`\`\`
-Rules: valid JSON. block types: "heading", "paragraph", "list" (with items array).
+Rules: valid JSON.
+
+## 7. Spreadsheets → Excel JSON
+When the user wants a spreadsheet / Excel / a downloadable table of data, output a fenced block tagged \`excel\` with JSON. It renders a live table preview and a Download .xlsx button (styled header, banded rows, frozen header, filters).
+- One or more "sheets", each with "name", "columns" and "rows".
+- "columns" is an array of header strings OR objects { "header", "width"?, "numFmt"? } where numFmt is an Excel format like "#,##0", "0.0%", "$#,##0.00" or "yyyy-mm-dd".
+- "rows" is an array of arrays. KEEP NUMBERS AS NUMBERS (not strings) so Excel can sort and sum them.
+\`\`\`excel
+{
+  "title": "Q3 Sales",
+  "accent": "059669",
+  "sheets": [
+    {
+      "name": "Summary",
+      "columns": ["Region", { "header": "Revenue", "numFmt": "$#,##0" }, { "header": "Growth", "numFmt": "0.0%" }],
+      "rows": [["APAC", 171000, 0.24], ["EMEA", 142000, 0.11], ["Americas", 210000, 0.08]]
+    }
+  ]
+}
+\`\`\`
+Rules: valid JSON. Use multiple sheets for distinct datasets. Prefer Excel for tabular/numeric data the user might want to filter or compute on; use a PDF for prose reports.
 
 For everything else use normal Markdown. Always add a short plain-text explanation after a visual.`
 
@@ -247,6 +311,16 @@ interface ChatMessage {
 }
 
 export async function POST(request: Request) {
+  // Per-IP rate limit — protects API quota and the instance from abuse.
+  const rl = rateLimit(`chat:${clientIp(request)}`, CHAT_RATE_LIMIT, CHAT_RATE_WINDOW)
+  if (!rl.ok) {
+    return jsonResponse(
+      { error: "Too many requests. Please slow down." },
+      { status: 429, headers: { "Retry-After": String(rl.retryAfter) } },
+      request
+    )
+  }
+
   let messages: ChatMessage[]
   let modelId: string | undefined
   let reasoning: ReasoningEffort | "off" = "off"
@@ -257,23 +331,29 @@ export async function POST(request: Request) {
     if (body.reasoning) reasoning = body.reasoning
     if (!Array.isArray(messages)) throw new Error("messages must be an array")
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid request body." }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    })
+    return jsonResponse({ error: "Invalid request body." }, { status: 400 }, request)
   }
+
+  // Validate + bound the input (DoS protection on a small instance).
+  messages = messages
+    .filter(
+      (m): m is ChatMessage =>
+        !!m && typeof m.content === "string" && ["user", "assistant", "system"].includes(m.role)
+    )
+    .slice(-MAX_MESSAGES)
+  if (messages.length === 0)
+    return jsonResponse({ error: "No valid messages." }, { status: 400 }, request)
+  if (messages.reduce((n, m) => n + m.content.length, 0) > MAX_TOTAL_CHARS)
+    return jsonResponse({ error: "Conversation too large." }, { status: 413 }, request)
 
   const model = getModel(modelId)
   const binding = getBinding(modelId)
   const provider = PROVIDERS[binding.provider]
   const apiKey = process.env[provider.envKey]
   if (!apiKey) {
-    return new Response(
-      JSON.stringify({
-        error: `${provider.envKey} is not set. Add it to .env.local and restart the dev server.`,
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    )
+    // Surfaced in server logs (e.g. Render) so missing env vars are obvious.
+    console.error(`[chat] Missing ${provider.envKey} — set it in the deployment environment.`)
+    return jsonResponse({ error: `${provider.envKey} is not configured on the server.` }, { status: 500 }, request)
   }
 
   const useReasoning = model.supportsReasoning && reasoning !== "off"
@@ -286,9 +366,10 @@ export async function POST(request: Request) {
       body.max_tokens = 8192
     } else if (binding.provider === "opencode") {
       // OpenCode Zen (DeepSeek) is a reasoning model: thinking tokens count
-      // toward the budget before any answer, so give extra headroom.
+      // toward the budget before any answer. Capped to keep responses bounded
+      // on small instances (was 16384 — too slow / timeout-prone in prod).
       body.top_p = 1
-      body.max_tokens = 16384
+      body.max_tokens = 6144
     } else {
       // groq
       body.max_tokens = useReasoning ? 4096 : 2048
@@ -321,21 +402,29 @@ export async function POST(request: Request) {
       body.tool_choice = "auto"
     }
     tuneBody(body)
-    const r = await fetch(provider.url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-    })
-    const j = (await r.json()) as {
-      choices?: { message?: ModelMessage }[]
+    const ctrl = new AbortController()
+    const to = setTimeout(() => ctrl.abort(), COMPLETE_TIMEOUT_MS)
+    try {
+      const r = await fetch(provider.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      })
+      const j = (await r.json()) as { choices?: { message?: ModelMessage }[] }
+      const msg = j?.choices?.[0]?.message
+      return { content: msg?.content ?? null, tool_calls: msg?.tool_calls }
+    } catch {
+      // Timeout or network error → end the sub-agent gracefully.
+      return { content: "", tool_calls: undefined }
+    } finally {
+      clearTimeout(to)
     }
-    const msg = j?.choices?.[0]?.message
-    return { content: msg?.content ?? null, tool_calls: msg?.tool_calls }
   }
 
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
-  const MAX_STEPS = 6 // safety cap on tool-loop iterations
+  const MAX_STEPS = 3 // safety cap on tool-loop iterations (was 6 — too slow in prod)
 
   // The agent loop: stream a model turn, run any tools it calls, repeat until
   // it produces a final answer (or we hit MAX_STEPS). Output is NDJSON events:
@@ -358,6 +447,8 @@ export async function POST(request: Request) {
           }
           tuneBody(reqBody)
 
+          const ctrl = new AbortController()
+          const to = setTimeout(() => ctrl.abort(), TURN_TIMEOUT_MS)
           let upstream: Response
           try {
             upstream = await fetch(provider.url, {
@@ -368,12 +459,17 @@ export async function POST(request: Request) {
                 Accept: "text/event-stream",
               },
               body: JSON.stringify(reqBody),
+              signal: ctrl.signal,
             })
           } catch {
+            clearTimeout(to)
+            console.error(`[chat] upstream unreachable/timeout (${binding.provider})`)
             emit({ t: "error" })
             return
           }
           if (!upstream.ok || !upstream.body) {
+            clearTimeout(to)
+            console.error(`[chat] upstream ${upstream.status} from ${binding.provider} (${binding.providerModel})`)
             emit({ t: "error" })
             return
           }
@@ -431,6 +527,8 @@ export async function POST(request: Request) {
               }
             }
           }
+
+          clearTimeout(to)
 
           const calls = toolCalls.filter((c) => c.name)
           if (calls.length === 0) break // no tools → final answer already streamed
@@ -494,6 +592,7 @@ export async function POST(request: Request) {
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
+      ...corsHeaders(request),
     },
   })
 }
