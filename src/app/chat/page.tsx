@@ -18,6 +18,9 @@ import {
   Code2,
   BookOpen,
   Command as CommandIcon,
+  MessageSquare,
+  Trash2,
+  LogOut,
 } from "lucide-react"
 import { MessageContent, type Visual } from "@/components/ui/message-content"
 import { ToolActivity, type Step } from "@/components/ui/tool-activity"
@@ -26,7 +29,7 @@ import { AgentPanel } from "@/components/ui/agent-panel"
 import { VisualPanel } from "@/components/ui/visual-panel"
 import { DraftCanvas, type DraftData } from "@/components/ui/draft-canvas"
 import { CommandPalette, type Command } from "@/components/ui/command-palette"
-import { ChatSidebar, type ConvoLite } from "@/components/ui/chat-sidebar"
+import { type ConvoLite } from "@/components/ui/chat-sidebar"
 import { ReasoningAura } from "@/components/ui/reasoning-aura"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
@@ -467,6 +470,14 @@ export default function ChatPage() {
   // ⌘K command palette commands.
   const commands: Command[] = [
     { id: "new", group: "Actions", label: "New chat", icon: Plus, keywords: "reset clear", run: reset },
+    ...conversations.slice(0, 8).map((c) => ({
+      id: `c-${c.id}`,
+      group: "Recent chats",
+      label: c.title,
+      icon: MessageSquare,
+      keywords: "history conversation past",
+      run: () => loadConversation(c.id),
+    })),
     {
       id: "p-ppt",
       group: "Start",
@@ -521,6 +532,10 @@ export default function ChatPage() {
     { id: "go-home", group: "Go to", label: "Home", icon: Home, run: () => (window.location.href = "/") },
     { id: "go-dev", group: "Go to", label: "Developers", icon: Code2, run: () => (window.location.href = "/developers") },
     { id: "go-res", group: "Go to", label: "Resources", icon: BookOpen, run: () => (window.location.href = "/resources") },
+    ...(conversationId
+      ? [{ id: "del", group: "Account", label: "Delete this chat", icon: Trash2, run: () => deleteConvo(conversationId) } as Command]
+      : []),
+    { id: "logout", group: "Account", label: "Log out", icon: LogOut, keywords: "sign out", run: logout },
   ]
 
   const empty = messages.length === 0
@@ -545,17 +560,6 @@ export default function ChatPage() {
 
       {/* Apple-Intelligence-style activation flash when "high" is selected */}
       <ReasoningAura trigger={auraTrigger} />
-
-      {/* ── Conversation history sidebar ── */}
-      <ChatSidebar
-        conversations={conversations}
-        activeId={conversationId}
-        userEmail={user?.email}
-        onSelect={loadConversation}
-        onNew={reset}
-        onDelete={deleteConvo}
-        onLogout={logout}
-      />
 
       {/* ── Chat column ── */}
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">

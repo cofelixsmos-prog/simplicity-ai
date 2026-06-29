@@ -1,16 +1,17 @@
 "use client"
 
+import { useRouter } from "next/navigation"
 import { Hero } from "@/components/ui/hero"
 import { Navbar } from "@/components/ui/navbar"
 import { ModelsSection } from "@/components/ui/models-section"
 import { Footer } from "@/components/ui/footer"
 
 export default function Home() {
-  const goToChat = () => {
-    window.location.href = "/chat"
-  }
-  const handleEarlyAccess = goToChat
-  const handleModelClick = () => goToChat()
+  const router = useRouter()
+  // Client-side nav (no full reload) straight to sign-up — avoids the slow
+  // window.location reload and the /chat -> /login bounce.
+  const handleEarlyAccess = () => router.push("/register")
+  const handleModelClick = () => router.push("/register")
 
   return (
     <>

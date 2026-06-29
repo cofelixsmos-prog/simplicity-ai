@@ -42,21 +42,25 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
       <ShaderBackground fixed />
       <LiquidGlassFilters />
 
-      <div className="anim-rise relative z-10 w-full max-w-sm" style={{ ["--delay" as string]: "40ms" } as CSSProperties}>
-        <div className="liquid-glass rounded-3xl p-7 shadow-[0_24px_64px_-16px_rgba(0,0,0,0.7)]">
-          <a href="/" className="mb-6 inline-flex items-center gap-2 text-[15px] font-semibold tracking-tight text-white">
-            <span className="size-1.5 rounded-full bg-white/80" />
-            Simplicity
-          </a>
+      <div
+        className="anim-rise relative z-10 w-full max-w-[400px]"
+        style={{ ["--delay" as string]: "40ms" } as CSSProperties}
+      >
+        <div className="liquid-glass rounded-[28px] p-8 shadow-[0_28px_70px_-18px_rgba(0,0,0,0.75)]">
+          {/* Brand + heading */}
+          <div className="mb-7 flex flex-col items-center text-center">
+            <span className="mb-4 flex size-11 items-center justify-center rounded-2xl bg-white text-lg font-bold tracking-tight text-black">
+              S
+            </span>
+            <h1 className="text-[22px] font-semibold tracking-tight text-white">
+              {isRegister ? "Create your account" : "Welcome back"}
+            </h1>
+            <p className="mt-1.5 text-sm text-white/50">
+              {isRegister ? "Start building with Simplicity." : "Log in to continue to Simplicity."}
+            </p>
+          </div>
 
-          <h1 className="text-2xl font-semibold tracking-tight text-white">
-            {isRegister ? "Create your account" : "Welcome back"}
-          </h1>
-          <p className="mt-1.5 text-sm text-white/55">
-            {isRegister ? "Start building with Simplicity." : "Log in to continue."}
-          </p>
-
-          <form onSubmit={submit} className="mt-6 space-y-3">
+          <form onSubmit={submit} className="space-y-3.5">
             {isRegister && (
               <Field label="Name" type="text" value={name} onChange={setName} placeholder="Your name" autoComplete="name" />
             )}
@@ -66,33 +70,37 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
               type="password"
               value={password}
               onChange={setPassword}
-              placeholder={isRegister ? "At least 8 characters" : "••••••••"}
+              placeholder={isRegister ? "At least 8 characters" : "Enter your password"}
               autoComplete={isRegister ? "new-password" : "current-password"}
               required
               minLength={isRegister ? 8 : undefined}
             />
 
             {error && (
-              <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</p>
+              <p className="rounded-xl border border-red-500/25 bg-red-500/10 px-3.5 py-2.5 text-xs text-red-300">{error}</p>
             )}
 
             <button
               type="submit"
               disabled={busy}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-white py-2.5 text-sm font-medium text-black transition-all hover:bg-white/90 hover:shadow-[0_0_28px_-6px_rgba(255,255,255,0.5)] disabled:opacity-50"
+              className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl bg-white py-3 text-sm font-semibold text-black transition-all hover:shadow-[0_0_32px_-6px_rgba(255,255,255,0.6)] active:scale-[0.99] disabled:opacity-50"
             >
               {busy && <Loader2 className="size-4 animate-spin" />}
               {isRegister ? "Create account" : "Log in"}
             </button>
           </form>
 
-          <p className="mt-5 text-center text-xs text-white/50">
-            {isRegister ? "Already have an account? " : "Don't have an account? "}
-            <a href={isRegister ? "/login" : "/register"} className="text-white underline underline-offset-2 transition-colors hover:text-white/80">
-              {isRegister ? "Log in" : "Sign up"}
+          <div className="my-5 h-px bg-white/10" />
+
+          <p className="text-center text-[13px] text-white/50">
+            {isRegister ? "Already have an account? " : "New to Simplicity? "}
+            <a href={isRegister ? "/login" : "/register"} className="font-medium text-white transition-colors hover:text-white/80">
+              {isRegister ? "Log in" : "Create an account"}
             </a>
           </p>
         </div>
+
+        <p className="mt-5 text-center text-[11px] text-white/30">Intelligence without complexity.</p>
       </div>
     </main>
   )
@@ -109,12 +117,12 @@ function Field({
 >) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium text-white/60">{label}</span>
+      <span className="mb-1.5 block text-[11px] font-medium uppercase tracking-wide text-white/45">{label}</span>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         {...rest}
-        className="w-full rounded-xl border border-white/15 bg-white/5 px-3.5 py-2.5 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-white/35"
+        className="w-full rounded-xl border border-white/12 bg-white/[0.04] px-4 py-3 text-[15px] text-white outline-none transition-all placeholder:text-white/30 focus:border-white/30 focus:bg-white/[0.06]"
       />
     </label>
   )
