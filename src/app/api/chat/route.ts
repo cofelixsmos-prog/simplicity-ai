@@ -12,6 +12,7 @@ const MAX_MESSAGES = 40 // history turns kept
 const MAX_TOTAL_CHARS = 120_000 // total input size cap
 const TURN_TIMEOUT_MS = 90_000 // per streaming model turn
 const COMPLETE_TIMEOUT_MS = 60_000 // per sub-agent (non-streaming) call
+const CODE_TIMEOUT_MS = 150_000 // per code-generation call (coder model is slower)
 
 export function OPTIONS(request: Request) {
   return preflight(request)
@@ -91,7 +92,15 @@ You have REAL tools. Call them instead of guessing or saying you can't access li
 - get_datetime — get the current date/time whenever the user asks about "today", "now", or anything time-relative.
 - create_draft — whenever the user asks you to WRITE something long-form (an essay, article, blog post, cover letter, story, report copy), call this with the full Markdown in the "content" argument. It opens an editable document for the user instead of dumping the whole thing in chat. Then give a one-line summary in chat.
 - update_draft — revise a draft you already created, by its id.
-- spawn_agents — for a BIG task with several independent parts (multi-angle research, a report that splits into sections, "compare X, Y and Z"), delegate to a team of sub-agents that run in parallel. YOU decide how many (1–3), name each, and give each a clear self-contained task. Each can search the web. When they finish you'll get their results — synthesize them into one answer. Don't spawn agents for small or single-step requests; just answer those yourself.
+- build_app — the tool that actually writes code. It hands a "title" + a detailed "spec" to a dedicated coding engine that produces the full multi-file project (HTML/CSS/JS or React) and opens it in a live, editable preview canvas. NEVER write code by hand in chat — always go through build_app. (In the coding workflow below you normally call this from inside a coder sub-agent, not directly.)
+- spawn_agents — delegate to a team of focused sub-agents that run in parallel. YOU decide how many (1–3), name each, set its kind (research / writer / coder / general), and give each a clear self-contained task. Research agents search the web, writer agents produce documents, coder agents call build_app. When they finish you'll get their results to synthesize. CRITICAL: never call spawn_agents with an empty list — if you call it, it must contain at least one real agent with a concrete task.
+
+# CODING WORKFLOW (when the user asks you to build / code / make a website, app, page, UI, game, or tool)
+Treat every coding request as a BIG task and follow this sequence across turns:
+1. QUESTIONS — if anything material is unclear (purpose, key features, scope, style/branding, data), ask 2–4 sharp clarifying questions using a \`questions\` block, then STOP and wait. Skip this only when the request is already specific.
+2. PLAN — present a short implementation plan using a \`plan\` block: the approach, the main files/screens you'll build, and the key features. Then STOP and wait for approval.
+3. BUILD — once approved ("[User approved the plan]"), execute by spawning a team with spawn_agents. Use AT LEAST TWO sub-agents: one "kind": "research" agent to gather relevant design patterns, libraries and references, and one "kind": "coder" agent whose task is to call build_app with a detailed spec (fold in the plan and any research direction). You act as the planner/coordinator. When they finish, give the user a one-line summary and point them to the live canvas — never paste code into chat.
+Prefer this multi-agent flow for essentially every real build. Only skip straight to a single build_app for a trivial one-off snippet.
 You may call tools multiple times and combine their results. After using tools, write the final answer for the user in normal Markdown (and visuals below where useful).
 
 # VISUALS & DELIVERABLES
@@ -358,21 +367,22 @@ export async function POST(request: Request) {
 
   const useReasoning = model.supportsReasoning && reasoning !== "off"
 
-  // Per-provider tuning, applied to every turn of the agent loop.
-  function tuneBody(body: Record<string, unknown>) {
-    if (binding.provider === "nvidia") {
+  // Per-provider tuning, applied to every turn of the agent loop. A caller may
+  // pre-set body.max_tokens (e.g. the coder needs a bigger budget) — respect it.
+  function tuneBody(body: Record<string, unknown>, prov: Provider) {
+    if (prov === "nvidia") {
       body.top_p = 1
       body.temperature = 1
-      body.max_tokens = 8192
-    } else if (binding.provider === "opencode") {
+      body.max_tokens = body.max_tokens ?? 8192
+    } else if (prov === "opencode") {
       // OpenCode Zen (DeepSeek) is a reasoning model: thinking tokens count
       // toward the budget before any answer. Capped to keep responses bounded
       // on small instances (was 16384 — too slow / timeout-prone in prod).
       body.top_p = 1
-      body.max_tokens = 6144
+      body.max_tokens = body.max_tokens ?? 6144
     } else {
       // groq
-      body.max_tokens = useReasoning ? 4096 : 2048
+      body.max_tokens = body.max_tokens ?? (useReasoning ? 4096 : 2048)
       if (useReasoning) {
         body.reasoning_effort = reasoning
         body.reasoning_format = "hidden"
@@ -386,45 +396,67 @@ export async function POST(request: Request) {
     ...messages.map((m) => ({ role: m.role, content: m.content })),
   ]
 
-  // One non-streaming model turn — used by sub-agents via the tool context.
-  async function complete(
-    msgs: Record<string, unknown>[],
-    tools?: ToolSchema[]
-  ): Promise<ModelMessage> {
-    const body: Record<string, unknown> = {
-      model: binding.providerModel,
-      stream: false,
-      temperature: 0.6,
-      messages: msgs,
-    }
-    if (tools) {
-      body.tools = tools
-      body.tool_choice = "auto"
-    }
-    tuneBody(body)
-    const ctrl = new AbortController()
-    const to = setTimeout(() => ctrl.abort(), COMPLETE_TIMEOUT_MS)
-    try {
-      const r = await fetch(provider.url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify(body),
-        signal: ctrl.signal,
-      })
-      const j = (await r.json()) as { choices?: { message?: ModelMessage }[] }
-      const msg = j?.choices?.[0]?.message
-      return { content: msg?.content ?? null, tool_calls: msg?.tool_calls }
-    } catch {
-      // Timeout or network error → end the sub-agent gracefully.
-      return { content: "", tool_calls: undefined }
-    } finally {
-      clearTimeout(to)
+  // Factory for a non-streaming completer bound to a specific provider/model.
+  // Tools reach these through the tool context (sub-agent orchestration, and
+  // code generation which is pinned to the dedicated coder model).
+  function makeComplete(
+    b: { provider: Provider; providerModel: string },
+    opts: { timeoutMs: number; temperature?: number; maxTokens?: number }
+  ) {
+    const prov = PROVIDERS[b.provider]
+    const key = process.env[prov.envKey]
+    return async function (
+      msgs: Record<string, unknown>[],
+      tools?: ToolSchema[]
+    ): Promise<ModelMessage> {
+      if (!key) return { content: "", tool_calls: undefined }
+      const body: Record<string, unknown> = {
+        model: b.providerModel,
+        stream: false,
+        temperature: opts.temperature ?? 0.6,
+        messages: msgs,
+      }
+      if (opts.maxTokens) body.max_tokens = opts.maxTokens
+      if (tools) {
+        body.tools = tools
+        body.tool_choice = "auto"
+      }
+      tuneBody(body, b.provider)
+      const ctrl = new AbortController()
+      const to = setTimeout(() => ctrl.abort(), opts.timeoutMs)
+      try {
+        const r = await fetch(prov.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+          body: JSON.stringify(body),
+          signal: ctrl.signal,
+        })
+        const j = (await r.json()) as { choices?: { message?: ModelMessage }[] }
+        const msg = j?.choices?.[0]?.message
+        return { content: msg?.content ?? null, tool_calls: msg?.tool_calls }
+      } catch {
+        // Timeout or network error → end the call gracefully.
+        return { content: "", tool_calls: undefined }
+      } finally {
+        clearTimeout(to)
+      }
     }
   }
 
+  // Orchestration completer runs on the user's selected model.
+  const complete = makeComplete(binding, { timeoutMs: COMPLETE_TIMEOUT_MS })
+  // Coding is always delegated to d1 / OpenCode Zen (the dedicated coder),
+  // whichever model the user is chatting on. Falls back to the main completer
+  // if the coder provider has no key configured on this server.
+  const coderBinding = MODEL_BINDINGS.d1
+  const coderHasKey = !!process.env[PROVIDERS[coderBinding.provider].envKey]
+  const completeCoder = coderHasKey
+    ? makeComplete(coderBinding, { timeoutMs: CODE_TIMEOUT_MS, temperature: 0.4, maxTokens: 8192 })
+    : complete
+
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
-  const MAX_STEPS = 3 // safety cap on tool-loop iterations (was 6 — too slow in prod)
+  const MAX_STEPS = 4 // safety cap on tool-loop iterations (coding flow: spawn team → synthesize)
 
   // The agent loop: stream a model turn, run any tools it calls, repeat until
   // it produces a final answer (or we hit MAX_STEPS). Output is NDJSON events:
@@ -433,7 +465,7 @@ export async function POST(request: Request) {
     async start(controller) {
       const emit = (ev: Record<string, unknown>) =>
         controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"))
-      const toolCtx: ToolCtx = { emit, complete }
+      const toolCtx: ToolCtx = { emit, complete, completeCoder }
 
       try {
         for (let step = 0; step < MAX_STEPS; step++) {
@@ -445,7 +477,7 @@ export async function POST(request: Request) {
             tools: TOOL_SCHEMAS,
             tool_choice: "auto",
           }
-          tuneBody(reqBody)
+          tuneBody(reqBody, binding.provider)
 
           const ctrl = new AbortController()
           const to = setTimeout(() => ctrl.abort(), TURN_TIMEOUT_MS)

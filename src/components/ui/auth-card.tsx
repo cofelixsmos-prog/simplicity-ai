@@ -1,9 +1,7 @@
 "use client"
 
-import { useState, type InputHTMLAttributes, type CSSProperties } from "react"
-import { Loader2 } from "lucide-react"
-import { ShaderBackground } from "@/components/ui/shader-background"
-import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
+import { useState, type InputHTMLAttributes } from "react"
+import { Loader2, ArrowRight } from "lucide-react"
 
 export function AuthCard({ mode }: { mode: "login" | "register" }) {
   const isRegister = mode === "register"
@@ -29,6 +27,9 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
         setError(data.error ?? "Something went wrong.")
         return
       }
+      try {
+        sessionStorage.setItem("sx-just-logged-in", "1")
+      } catch {}
       window.location.href = "/chat"
     } catch {
       setError("Network error — please try again.")
@@ -38,29 +39,28 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
   }
 
   return (
-    <main className="relative flex min-h-dvh items-center justify-center px-4">
-      <ShaderBackground fixed />
-      <LiquidGlassFilters />
-
-      <div
-        className="anim-rise relative z-10 w-full max-w-[400px]"
-        style={{ ["--delay" as string]: "40ms" } as CSSProperties}
-      >
-        <div className="liquid-glass rounded-[28px] p-8 shadow-[0_28px_70px_-18px_rgba(0,0,0,0.75)]">
-          {/* Brand + heading */}
-          <div className="mb-7 flex flex-col items-center text-center">
-            <span className="mb-4 flex size-11 items-center justify-center rounded-2xl bg-white text-lg font-bold tracking-tight text-black">
+    <main className="flex min-h-dvh items-center justify-center bg-background px-4 py-10">
+      <div className="anim-rise w-full max-w-[420px]">
+        <div className="rounded-2xl border border-border bg-[#0a0a0b] p-8 sm:p-10">
+          {/* badge + eyebrow */}
+          <div className="mb-8 flex items-center justify-between">
+            <span className="flex size-9 items-center justify-center rounded-md border border-white/15 font-mono text-sm font-medium text-white">
               S
             </span>
-            <h1 className="text-[22px] font-semibold tracking-tight text-white">
-              {isRegister ? "Create your account" : "Welcome back"}
-            </h1>
-            <p className="mt-1.5 text-sm text-white/50">
-              {isRegister ? "Start building with Simplicity." : "Log in to continue to Simplicity."}
-            </p>
+            <span className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              {isRegister ? "Sign up" : "Log in"}
+            </span>
           </div>
 
-          <form onSubmit={submit} className="space-y-3.5">
+          {/* heading */}
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">
+            {isRegister ? "Create your account" : "Welcome back"}
+          </h1>
+          <p className="mt-2 text-[15px] text-muted-foreground">
+            {isRegister ? "Start building with Simplicity." : "Log in to continue to Simplicity."}
+          </p>
+
+          <form onSubmit={submit} className="mt-8 space-y-5">
             {isRegister && (
               <Field label="Name" type="text" value={name} onChange={setName} placeholder="Your name" autoComplete="name" />
             )}
@@ -77,30 +77,31 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
             />
 
             {error && (
-              <p className="rounded-xl border border-red-500/25 bg-red-500/10 px-3.5 py-2.5 text-xs text-red-300">{error}</p>
+              <p className="border-l-2 border-red-500/60 bg-red-500/5 px-3 py-2 text-xs text-red-300">{error}</p>
             )}
 
             <button
               type="submit"
               disabled={busy}
-              className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl bg-white py-3 text-sm font-semibold text-black transition-all hover:shadow-[0_0_32px_-6px_rgba(255,255,255,0.6)] active:scale-[0.99] disabled:opacity-50"
+              className="group mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-white py-3.5 text-sm font-semibold text-black transition-all hover:opacity-90 active:scale-[0.99] disabled:opacity-50"
             >
-              {busy && <Loader2 className="size-4 animate-spin" />}
+              {busy ? <Loader2 className="size-4 animate-spin" /> : null}
               {isRegister ? "Create account" : "Log in"}
+              {!busy && <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />}
             </button>
           </form>
 
-          <div className="my-5 h-px bg-white/10" />
+          <div className="my-6 h-px bg-border" />
 
-          <p className="text-center text-[13px] text-white/50">
+          <p className="text-center text-sm text-muted-foreground">
             {isRegister ? "Already have an account? " : "New to Simplicity? "}
-            <a href={isRegister ? "/login" : "/register"} className="font-medium text-white transition-colors hover:text-white/80">
+            <a href={isRegister ? "/login" : "/register"} className="font-medium text-foreground transition-opacity hover:opacity-70">
               {isRegister ? "Log in" : "Create an account"}
             </a>
           </p>
         </div>
 
-        <p className="mt-5 text-center text-[11px] text-white/30">Intelligence without complexity.</p>
+        <p className="mt-6 text-center text-xs tracking-wide text-muted-foreground">Intelligence without complexity.</p>
       </div>
     </main>
   )
@@ -117,12 +118,12 @@ function Field({
 >) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-[11px] font-medium uppercase tracking-wide text-white/45">{label}</span>
+      <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         {...rest}
-        className="w-full rounded-xl border border-white/12 bg-white/[0.04] px-4 py-3 text-[15px] text-white outline-none transition-all placeholder:text-white/30 focus:border-white/30 focus:bg-white/[0.06]"
+        className="mt-2 w-full border-b border-white/12 bg-transparent pb-2 text-[15px] text-foreground outline-none transition-colors placeholder:text-white/25 focus:border-white/45"
       />
     </label>
   )

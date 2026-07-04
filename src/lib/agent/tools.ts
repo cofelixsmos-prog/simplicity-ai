@@ -8,7 +8,7 @@
 import { randomUUID } from "crypto"
 import { eq } from "drizzle-orm"
 import { db, initDb } from "@/lib/db"
-import { drafts } from "@/lib/db/schema"
+import { drafts, apps } from "@/lib/db/schema"
 
 export interface ToolSchema {
   type: "function"
@@ -32,10 +32,14 @@ export interface ModelMessage {
 }
 
 // Context handed to tools that need to stream events or call the model
-// themselves (e.g. spawn_agents running sub-agents).
+// themselves (e.g. spawn_agents running sub-agents, build_app delegating code).
 export interface ToolCtx {
   emit: (ev: Record<string, unknown>) => void
+  // A completion on the user's selected model — used for orchestration.
   complete: (messages: Record<string, unknown>[], tools?: ToolSchema[]) => Promise<ModelMessage>
+  // A completion pinned to the dedicated coding model (d1 / OpenCode Zen),
+  // regardless of which model the user is chatting on. Used by build_app.
+  completeCoder: (messages: Record<string, unknown>[], tools?: ToolSchema[]) => Promise<ModelMessage>
 }
 
 interface AgentTool {
@@ -128,6 +132,204 @@ async function updateDraft(args: Record<string, unknown>): Promise<ToolResult> {
   }
 }
 
+// ── build_app: delegate real coding to the dedicated coder model ─────────────
+// The coding engine (d1 / OpenCode Zen) writes a complete, runnable multi-file
+// frontend project. We parse its files, persist the project, and open it in the
+// live code canvas. The orchestrating model never writes the code itself.
+
+interface ProjectFile {
+  name: string
+  content: string
+}
+
+const CODER_SYSTEM = `You are an elite frontend engineer on the Simplicity team. Build a complete, polished, working frontend project from the user's request.
+
+OUTPUT FORMAT — this is critical. Output ONLY the project files. Precede each file with a line in EXACTLY this form (nothing else on the line):
+=== FILE: <path> ===
+then that file's full raw contents. No prose, no commentary, and do NOT wrap files in markdown code fences. Example:
+=== FILE: index.html ===
+<!doctype html>
+<html>...</html>
+=== FILE: styles.css ===
+:root { ... }
+
+RULES
+- ALWAYS make index.html the FIRST file — it is the entry point the preview boots from.
+- Pick the simplest stack that fits: plain HTML/CSS/JS for most things; use React only when the UI genuinely needs components and state.
+- For React: in index.html load React, ReactDOM and Babel standalone from a CDN (unpkg or jsdelivr), add <div id="root"></div>, and reference your component files with <script type="text/babel" src="app.jsx"></script>. Put components in separate .jsx files. The preview automatically inlines local files, so reference them by their plain filename (e.g. "app.jsx", "styles.css").
+- Split concerns into multiple files (e.g. index.html + styles.css + app.js or app.jsx). Don't cram everything into one file unless it is genuinely tiny.
+- Make it look genuinely great: modern and responsive, clean typography, generous spacing, a cohesive palette, real hover/focus states and small touches of polish. Match the requested vibe; when unspecified, a refined dark theme usually looks best.
+- It MUST run with no build step and no server — only CDN dependencies, no npm imports or bundlers. Keep everything client-side; no calls to private/authenticated APIs.
+Write the full, production-quality files now.`
+
+// A terser, more forceful retry prompt for when the first attempt returns
+// nothing parseable (the reasoning model sometimes rambles instead of emitting).
+const CODER_RETRY_SYSTEM = `You are a frontend engineer. Output a complete, runnable project as raw files ONLY.
+For each file, write a line exactly like "=== FILE: index.html ===" then the file's contents. Start with index.html.
+No thinking out loud, no explanations, no markdown fences — just the === FILE: markers and file contents. Keep it focused and working.`
+
+function stripFence(body: string): string {
+  let b = body.replace(/^\s*```[a-zA-Z0-9]*[^\n]*\n/, "").replace(/\n```\s*$/, "")
+  return b.replace(/^\n+/, "").replace(/\s+$/, "") + "\n"
+}
+
+// Guess a filename for a fenced block that had no explicit name, from its language.
+function defaultName(lang: string, used: Set<string>): string {
+  const map: Record<string, string> = {
+    html: "index.html",
+    css: "styles.css",
+    js: "script.js",
+    javascript: "script.js",
+    jsx: "app.jsx",
+    tsx: "app.jsx",
+    ts: "app.js",
+    typescript: "app.js",
+    json: "data.json",
+  }
+  let name = map[lang.toLowerCase()] ?? "file.txt"
+  // Avoid collisions (e.g. two js blocks) by numbering the later ones.
+  if (used.has(name)) {
+    const dot = name.lastIndexOf(".")
+    let n = 2
+    let candidate: string
+    do {
+      candidate = `${name.slice(0, dot)}-${n}${name.slice(dot)}`
+      n++
+    } while (used.has(candidate))
+    name = candidate
+  }
+  return name
+}
+
+// Parse the coder's output into files. Tries, in order: explicit "=== FILE: ==="
+// markers, named/typed code fences, then a single raw HTML document. This
+// tolerance is what keeps builds from failing when the model drifts off-format.
+function parseProjectFiles(text: string): ProjectFile[] {
+  // 1) Explicit "=== FILE: name ===" markers (our requested format).
+  if (/===\s*FILE:/i.test(text)) {
+    const parts = text.split(/^[ \t]*===\s*FILE:\s*(.+?)\s*===[ \t]*$/gim)
+    const files: ProjectFile[] = []
+    for (let i = 1; i < parts.length; i += 2) {
+      const name = parts[i].trim().replace(/^["'`]+|["'`]+$/g, "").slice(0, 200)
+      const body = stripFence(parts[i + 1] ?? "")
+      if (name && body.trim()) files.push({ name, content: body })
+    }
+    if (files.length) return files
+  }
+
+  // 2) Code fences, using any filename in the info string, else the language.
+  const fenceRe = /```([a-zA-Z0-9]*)([^\n]*)\n([\s\S]*?)```/g
+  const fenced: ProjectFile[] = []
+  const used = new Set<string>()
+  let m: RegExpExecArray | null
+  while ((m = fenceRe.exec(text)) !== null) {
+    const lang = m[1] ?? ""
+    const info = m[2] ?? ""
+    const body = (m[3] ?? "").replace(/\s+$/, "") + "\n"
+    if (!body.trim()) continue
+    const named =
+      /(?:file|name|title|path)\s*=?\s*["']?([\w./-]+\.\w+)["']?/i.exec(info)?.[1] ??
+      /\b([\w./-]+\.(?:html?|css|jsx?|tsx?|json))\b/i.exec(info)?.[1]
+    const name = (named ?? defaultName(lang, used)).replace(/^\.?\//, "")
+    used.add(name)
+    fenced.push({ name, content: body })
+  }
+  if (fenced.length) return fenced
+
+  // 3) Whole response is (or contains) a single HTML document.
+  if (/<!doctype html|<html[\s>]/i.test(text)) {
+    const start = text.search(/<!doctype html|<html[\s>]/i)
+    return [{ name: "index.html", content: text.slice(start).replace(/\s+$/, "") + "\n" }]
+  }
+
+  return []
+}
+
+function pickEntry(files: ProjectFile[]): string {
+  const index = files.find((f) => /(^|\/)index\.html$/i.test(f.name))
+  const anyHtml = files.find((f) => /\.html?$/i.test(f.name))
+  return (index ?? anyHtml ?? files[0]).name
+}
+
+async function buildApp(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  const title = (String(args.title ?? "").trim() || "Untitled app").slice(0, 200)
+  const spec = String(args.spec ?? "").trim()
+  if (!ctx) return { result: "Coding is unavailable in this context.", detail: "error" }
+  if (!spec) return { result: "No build spec was provided.", detail: "empty" }
+
+  // Granular activity so the user can watch the build unfold (design → files → preview).
+  const sid = randomUUID()
+  const design = (status: string, detail?: string) =>
+    ctx.emit({ t: "step", id: `${sid}-design`, tool: "design", label: `Designing “${title}”`, status, detail })
+
+  design("running")
+
+  // Delegate to the dedicated coder model, retrying once with a stricter prompt
+  // if the first attempt comes back empty/unparseable.
+  let files: ProjectFile[] = []
+  for (let attempt = 0; attempt < 2 && files.length === 0; attempt++) {
+    if (attempt === 1)
+      ctx.emit({ t: "step", id: `${sid}-retry`, tool: "design", label: "Reworking the build", status: "running" })
+    const msg = await ctx.completeCoder([
+      { role: "system", content: attempt === 0 ? CODER_SYSTEM : CODER_RETRY_SYSTEM },
+      { role: "user", content: spec },
+    ])
+    files = parseProjectFiles(String(msg.content ?? ""))
+    if (attempt === 1)
+      ctx.emit({
+        t: "step",
+        id: `${sid}-retry`,
+        tool: "design",
+        label: "Reworking the build",
+        status: files.length ? "done" : "error",
+      })
+  }
+
+  if (files.length === 0) {
+    design("error")
+    return {
+      result:
+        "The coding engine could not produce a working project after two attempts (it may be overloaded or " +
+        "timed out). Do NOT silently retry the same way — briefly tell the user the build didn't go through and " +
+        "ask whether they'd like you to try again or simplify the scope.",
+      detail: "failed",
+    }
+  }
+
+  design("done", `${files.length} files`)
+
+  // Show each file as it's written into the project.
+  files.forEach((f, i) => {
+    const lines = f.content.replace(/\n$/, "").split("\n").length
+    ctx.emit({
+      t: "step",
+      id: `${sid}-f${i}`,
+      tool: "write_file",
+      label: `Wrote ${f.name}`,
+      status: "done",
+      detail: `${lines} ${lines === 1 ? "line" : "lines"}`,
+    })
+  })
+
+  const entry = pickEntry(files)
+  await initDb()
+  const id = randomUUID()
+  const now = Date.now()
+  await db.insert(apps).values({ id, title, files: JSON.stringify(files), entry, createdAt: now, updatedAt: now })
+
+  ctx.emit({ t: "step", id: `${sid}-run`, tool: "preview", label: "Opened live preview", status: "done", detail: "ready" })
+
+  const fileList = files.map((f) => f.name).join(", ")
+  return {
+    result:
+      `Built "${title}" — ${files.length} file(s): ${fileList}. The project is now open in the live code ` +
+      `canvas where the user can preview and edit it. Give a brief one-line summary of what you built and ` +
+      `point them to the canvas. Do NOT paste the code into chat.`,
+    detail: `${files.length} files`,
+    ui: { t: "code", id, title, files, entry },
+  }
+}
+
 // ── get_datetime: zero-config, proves the loop end-to-end ────────────────────
 async function getDatetime(): Promise<ToolResult> {
   const now = new Date()
@@ -141,26 +343,38 @@ async function getDatetime(): Promise<ToolResult> {
 const SUB_MAX_STEPS = 3
 const MAX_SUBAGENTS = 3 // parallel cap — bounds memory/concurrency on small instances
 
-function subagentPrompt(name: string): string {
-  return (
+type AgentKind = "research" | "writer" | "coder" | "general"
+
+function subagentPrompt(name: string, kind: AgentKind): string {
+  const base =
     `You are "${name}", a focused sub-agent on a team coordinated by Simplicity. ` +
-    `Complete ONLY your assigned task. Use web_search to ground facts when useful. ` +
-    `Be concise — return just your findings or result, with no preamble and no questions.`
-  )
+    `Complete ONLY your assigned task, then return a concise result with no preamble and no questions. `
+  const tips: Record<AgentKind, string> = {
+    research:
+      "Use web_search to ground every claim in current sources and cite the key links in your result.",
+    writer:
+      "When the task is to write a document, essay, report or other long-form copy, call create_draft with the full Markdown.",
+    coder:
+      "When the task is to build a UI, app, website, page or interactive tool, call build_app with a clear title and a detailed spec.",
+    general:
+      "Use your tools as needed to actually produce the deliverable: web_search to research, create_draft to write documents, build_app to build UIs/apps.",
+  }
+  return base + tips[kind]
 }
 
 interface SubAgentSpec {
   id: string
   name: string
   task: string
+  kind: AgentKind
 }
 
 async function runSubAgent(spec: SubAgentSpec, ctx: ToolCtx): Promise<string> {
-  const { id, name, task } = spec
+  const { id, name, task, kind } = spec
   ctx.emit({ t: "agent", id, name, task, status: "running" })
 
   const convo: Record<string, unknown>[] = [
-    { role: "system", content: subagentPrompt(name) },
+    { role: "system", content: subagentPrompt(name, kind) },
     { role: "user", content: task },
   ]
 
@@ -188,7 +402,9 @@ async function runSubAgent(spec: SubAgentSpec, ctx: ToolCtx): Promise<string> {
         const tool = SUBAGENT_TOOLS[toolName]
         const label = tool ? tool.label(a) : `Running ${toolName}`
         ctx.emit({ t: "agent_step", agentId: id, id: stepId, tool: toolName, label, status: "running" })
-        const r = tool ? await tool.run(a) : { result: `Unknown tool: ${toolName}`, detail: "error" }
+        // Pass ctx so deliverable tools (create_draft, build_app) work and can
+        // open their canvas in the UI.
+        const r = tool ? await tool.run(a, ctx) : { result: `Unknown tool: ${toolName}`, detail: "error" }
         ctx.emit({
           t: "agent_step",
           agentId: id,
@@ -198,6 +414,8 @@ async function runSubAgent(spec: SubAgentSpec, ctx: ToolCtx): Promise<string> {
           status: r.detail === "error" ? "error" : "done",
           detail: r.detail,
         })
+        // Forward any UI payload (an opened draft / code canvas) to the client.
+        if (r.ui) ctx.emit(r.ui)
         convo.push({ role: "tool", tool_call_id: stepId, content: r.result })
       }
     }
@@ -209,6 +427,15 @@ async function runSubAgent(spec: SubAgentSpec, ctx: ToolCtx): Promise<string> {
   }
 }
 
+function normalizeKind(raw: unknown): AgentKind {
+  const k = String(raw ?? "").toLowerCase()
+  if (k === "research" || k === "writer" || k === "coder" || k === "general") return k
+  if (k === "write" || k === "writing" || k === "docs" || k === "document") return "writer"
+  if (k === "code" || k === "coding" || k === "engineer" || k === "developer") return "coder"
+  if (k === "search" || k === "researcher") return "research"
+  return "general"
+}
+
 async function spawnAgents(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
   const raw = Array.isArray(args.agents) ? (args.agents as Record<string, unknown>[]) : []
   const specs: SubAgentSpec[] = raw
@@ -217,6 +444,7 @@ async function spawnAgents(args: Record<string, unknown>, ctx?: ToolCtx): Promis
       id: randomUUID(),
       name: String(s?.name ?? `Agent ${i + 1}`).slice(0, 40),
       task: String(s?.task ?? "").trim(),
+      kind: normalizeKind(s?.kind),
     }))
     .filter((s) => s.task)
 
@@ -226,13 +454,13 @@ async function spawnAgents(args: Record<string, unknown>, ctx?: ToolCtx): Promis
   // Run the whole team in parallel; each streams its own progress to the UI.
   const results = await Promise.all(specs.map((s) => runSubAgent(s, ctx)))
   const combined = specs
-    .map((s, i) => `### ${s.name}\nTask: ${s.task}\nResult:\n${results[i]}`)
+    .map((s, i) => `### ${s.name} (${s.kind})\nTask: ${s.task}\nResult:\n${results[i]}`)
     .join("\n\n")
 
   return {
     result:
-      `All ${specs.length} sub-agents have finished. Synthesize their findings into one clear, ` +
-      `well-organized answer for the user:\n\n${combined}`,
+      `All ${specs.length} sub-agents have finished. Any documents or apps they produced are already open ` +
+      `for the user. Synthesize their findings into one clear, well-organized answer:\n\n${combined}`,
     detail: `${specs.length} agents`,
   }
 }
@@ -314,6 +542,36 @@ export const TOOLS: Record<string, AgentTool> = {
     label: (a) => `Revising draft ${String(a.id ?? "").slice(0, 8)}`,
     run: updateDraft,
   },
+  build_app: {
+    schema: {
+      type: "function",
+      function: {
+        name: "build_app",
+        description:
+          "Build a complete, runnable frontend project — a website, web app, landing page, UI, dashboard, game, " +
+          "interactive tool or component. Call this WHENEVER the user asks you to code, build, make or design a " +
+          "website / app / page / UI. A specialized coding engine writes the multi-file project (HTML/CSS/JS or " +
+          "React) and opens it in a live, editable preview canvas for the user. Do NOT write the code yourself — " +
+          "delegate it here with a detailed spec. You can call build_app again to make a different app.",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "A short title for the project, e.g. \"Pomodoro Timer\"." },
+            spec: {
+              type: "string",
+              description:
+                "A detailed description of exactly what to build: the purpose, the key features and content, " +
+                "the layout, and any style/branding preferences. Be specific — this is the only instruction the " +
+                "coding engine receives.",
+            },
+          },
+          required: ["title", "spec"],
+        },
+      },
+    },
+    label: (a) => `Building “${String(a.title ?? "app").slice(0, 60)}”`,
+    run: buildApp,
+  },
   spawn_agents: {
     schema: {
       type: "function",
@@ -321,9 +579,11 @@ export const TOOLS: Record<string, AgentTool> = {
         name: "spawn_agents",
         description:
           "Delegate a BIG, multi-part task to a team of focused sub-agents that run in parallel. " +
-          "YOU decide how many to spawn (1–3), name each one, and give each a clear, self-contained task. " +
-          "Use this for research with several distinct angles, or work that splits into independent parts. " +
-          "Each sub-agent can search the web. After they finish you will receive their results to synthesize.",
+          "YOU decide how many to spawn (1–3), name each one, set its `kind`, and give each a clear, " +
+          "self-contained task. Use this for work that splits into independent parts — e.g. research with " +
+          "several angles, or a build that needs both a document and an app. Each sub-agent has real tools: " +
+          "research agents search the web, writer agents produce documents, coder agents build apps. " +
+          "After they finish you will receive their results to synthesize.",
         parameters: {
           type: "object",
           properties: {
@@ -333,7 +593,13 @@ export const TOOLS: Record<string, AgentTool> = {
               items: {
                 type: "object",
                 properties: {
-                  name: { type: "string", description: "A short name for this sub-agent, e.g. \"Market Researcher\"." },
+                  name: { type: "string", description: "A short name, e.g. \"Market Researcher\" or \"UI Builder\"." },
+                  kind: {
+                    type: "string",
+                    enum: ["research", "writer", "coder", "general"],
+                    description:
+                      "The agent's specialty: research (web search), writer (documents), coder (build apps), or general.",
+                  },
                   task: { type: "string", description: "The specific, self-contained task for this sub-agent." },
                 },
                 required: ["name", "task"],
@@ -354,10 +620,13 @@ export const TOOLS: Record<string, AgentTool> = {
 
 export const TOOL_SCHEMAS = Object.values(TOOLS).map((t) => t.schema)
 
-// Tools available to sub-agents — a research subset. Deliberately excludes
-// spawn_agents (no recursion) and create_draft (drafts are a parent deliverable).
+// Tools available to sub-agents — a versatile subset so a team can actually
+// produce deliverables (research, documents, apps). Deliberately excludes
+// spawn_agents (no recursion) and update_draft (revision is a parent concern).
 const SUBAGENT_TOOLS: Record<string, AgentTool> = {
   web_search: TOOLS.web_search,
   get_datetime: TOOLS.get_datetime,
+  create_draft: TOOLS.create_draft,
+  build_app: TOOLS.build_app,
 }
 const SUBAGENT_TOOL_SCHEMAS = Object.values(SUBAGENT_TOOLS).map((t) => t.schema)

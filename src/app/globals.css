@@ -73,6 +73,11 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.625rem;
+  /* motion durations — everything animates on one of these */
+  --dur-fast: 150ms;
+  --dur-base: 250ms;
+  --dur-slow: 500ms;
+  --dur-ambient: 1200ms;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -127,29 +132,105 @@
   html {
     @apply font-sans;
   }
+
+  /* One designed keyboard-focus ring across every control (text inputs keep
+     their own component styling). A gap ring reads far more premium than the
+     browser default. */
+  :where(button, a, [role="button"], [tabindex]):focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--background),
+      0 0 0 4px rgba(255, 255, 255, 0.4);
+    border-radius: inherit;
+  }
+
+  /* Premium text selection */
+  ::selection {
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+  }
+
+  /* Thin, quiet scrollbars that don't cheapen the surface */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.26);
+    background-clip: content-box;
+  }
 }
 
 /* ── Liquid glass (Apple-style) ──────────────────────────────
    Real refraction via an SVG displacement filter, layered with
-   blur + inset highlight. Monochrome, no color, no gradient. */
+   blur, a specular rim, a pointer-tracked glint, ambient occlusion,
+   and a legibility scrim so content stays readable over the living
+   background. Elevation + radius are tokenized so every glass
+   surface floats and rounds identically. Monochrome. */
+
+/* --press (0–1): how deeply the surface is being pushed in. Registered so it
+   springs back on release instead of snapping. */
+@property --press {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+:root {
+  --glass-radius: 26px;
+  --glass-shadow:
+    0 2px 6px -2px rgba(0, 0, 0, 0.5),
+    0 26px 70px -28px rgba(0, 0, 0, 0.8);
+}
+
 .liquid-glass {
   position: relative;
   isolation: isolate;
   background-color: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.12);
+  /* Explicit list (not `all`) so press deformation springs while focus/hover
+     border + shadow transitions on glass surfaces still work. */
+  transition:
+    transform 0.3s var(--ease-spring),
+    --press 0.3s var(--ease-spring),
+    border-color 0.3s var(--ease-out-expo),
+    box-shadow 0.3s var(--ease-out-expo),
+    background-color 0.3s var(--ease-out-expo);
 }
 .liquid-glass::before {
-  /* top-edge + rim highlight that sells the glass */
+  /* press dimple (top) + pointer glint + legibility scrim + specular rim */
   content: "";
   position: absolute;
   inset: 0;
   z-index: 0;
   border-radius: inherit;
   pointer-events: none;
+  background:
+    radial-gradient(
+      130px circle at var(--gx, 50%) var(--gy, 50%),
+      rgba(0, 0, 0, calc(0.3 * var(--press, 0))) 0%,
+      rgba(255, 255, 255, calc(0.14 * var(--press, 0))) 42%,
+      transparent 68%
+    ),
+    linear-gradient(160deg, rgba(0, 0, 0, 0.08), rgba(0, 0, 0, 0.18));
   box-shadow:
     inset 1.5px 1.5px 0px -1px rgba(255, 255, 255, 0.6),
     inset 0 0 4px 1px rgba(255, 255, 255, 0.25),
-    inset 0 -1px 6px -2px rgba(255, 255, 255, 0.15);
+    inset 0 -1px 6px -2px rgba(255, 255, 255, 0.15),
+    inset -1.5px -1.5px 6px -3px rgba(0, 0, 0, 0.45); /* ambient occlusion opposite the light */
+  transition: box-shadow 0.2s var(--ease-spring);
 }
 .liquid-glass::after {
   /* the refractive backdrop layer */
@@ -168,11 +249,62 @@
   position: relative;
   z-index: 1;
 }
-/* lighter variant for big panels (subtler distortion, more blur) */
+/* hover — the glass notices you before you touch it: the rim catches a
+   touch more light. No movement, just awareness. */
+.liquid-glass:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+}
+/* press = physically pushing into the glass: the whole surface dips (and
+   springs back via the --press transition) while a dimple forms under the
+   cursor. --press drives the dent depth in ::before. */
+.liquid-glass:active {
+  --press: 1;
+  transform: scale(0.985);
+}
+/* press lens — the rim blooms brighter when the surface is pressed */
+.liquid-glass:active::before {
+  box-shadow:
+    inset 2px 2px 0px -1px rgba(255, 255, 255, 0.8),
+    inset 0 0 9px 2px rgba(255, 255, 255, 0.38),
+    inset 0 -1px 6px -2px rgba(255, 255, 255, 0.2),
+    inset -1.5px -1.5px 6px -3px rgba(0, 0, 0, 0.45);
+}
+
+/* soft variant — reading surfaces (panels, canvases, menus): more opaque
+   and calmer so text is effortless, with a stronger scrim + more blur. */
+.liquid-glass-soft {
+  background-color: rgba(12, 12, 14, 0.55);
+}
+.liquid-glass-soft::before {
+  background:
+    radial-gradient(
+      150px circle at var(--gx, 50%) var(--gy, 50%),
+      rgba(0, 0, 0, calc(0.32 * var(--press, 0))) 0%,
+      rgba(255, 255, 255, calc(0.12 * var(--press, 0))) 44%,
+      transparent 70%
+    ),
+    linear-gradient(160deg, rgba(0, 0, 0, 0.24), rgba(0, 0, 0, 0.36));
+}
 .liquid-glass-soft::after {
-  backdrop-filter: blur(18px) saturate(1.15);
-  -webkit-backdrop-filter: blur(18px) saturate(1.15);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
   filter: url(#liquid-glass-filter-soft);
+}
+
+/* tokenized elevation + radius — one source of truth for glass "float" */
+.glass-float {
+  box-shadow: var(--glass-shadow);
+}
+.glass-panel {
+  box-shadow: var(--glass-shadow);
+  border-radius: var(--glass-radius);
+}
+/* Large floating surfaces shouldn't deform when you click their contents
+   (:active matches ancestors) — only the pressed control itself bends. */
+.glass-float:active,
+.glass-panel:active {
+  --press: 0;
+  transform: none;
 }
 
 /* ── Apple-style motion system ───────────────────────────────
@@ -209,6 +341,18 @@
   animation-delay: var(--delay, 0s);
 }
 .anim-float { animation: appleFloat 6s var(--ease-smooth) infinite; }
+
+/* pure fade — opacity only, no translate/scale. For moments that should
+   never read as a "pop" or bounce (e.g. the welcome-back overlay). */
+@keyframes fadeOnly {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.anim-fade {
+  opacity: 0;
+  animation: fadeOnly 0.9s var(--ease-smooth) forwards;
+  animation-delay: var(--delay, 0s);
+}
 
 /* blinking "typing" caret shown at the end of streaming assistant text */
 @keyframes caretBlink {
@@ -252,21 +396,83 @@
   transform: translateY(-4px);
 }
 
-/* global tactile press on tappables — the little Apple "squish" */
+/* global tactile press on tappables — the Apple "squish".
+   Asymmetric timing is what makes it feel physical: the press-down is nearly
+   instant (your finger arrived), the release springs back with one soft
+   overshoot (the surface catching up). */
 @layer base {
   button:not(:disabled),
   [role="button"] {
-    transition: transform 0.18s var(--ease-spring);
+    transition: transform 0.35s var(--ease-spring);
   }
   button:not(:disabled):active,
   [role="button"]:active {
-    transform: scale(0.96);
+    transform: scale(0.94);
+    transition-duration: 0.08s;
+    transition-timing-function: var(--ease-smooth);
+  }
+}
+
+/* ── Glass drop-in ────────────────────────────────────────────
+   One clean settle — a subtle rise + a single gentle overshoot from
+   the spring easing. No squash/stretch, no double wobble. Press
+   spring-back is handled by the --press/transform transition. */
+@keyframes liquidIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.glass-in {
+  animation: liquidIn 0.5s var(--ease-spring) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .glass-in {
+    animation: none;
+  }
+}
+
+/* ── Conversation motion ─────────────────────────────────────
+   Sending and receiving each have their own physics. A sent message
+   springs up out of the composer (it was just under your fingers —
+   it leaves with energy). A reply settles in like ink: a slower,
+   decelerating rise with no bounce — it arrives, it doesn't perform. */
+@keyframes msgInUser {
+  from { opacity: 0; transform: translateY(18px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.msg-in-user {
+  animation: msgInUser 0.5s var(--ease-spring) both;
+  transform-origin: bottom right;
+}
+@keyframes msgInAi {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.msg-in-ai {
+  animation: msgInAi 0.65s var(--ease-out-expo) both;
+}
+
+/* first send — the whole conversation surface breathes into place as the
+   hero hands off to the chat (composer re-docks, messages fade up) */
+@keyframes chatStart {
+  from { opacity: 0; transform: translateY(26px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.chat-start {
+  animation: chatStart 0.65s var(--ease-out-expo) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-in-user,
+  .msg-in-ai,
+  .chat-start {
+    animation: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .anim-rise,
   .anim-scale-in,
+  .anim-fade,
   .anim-float {
     animation: none !important;
     opacity: 1 !important;

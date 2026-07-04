@@ -1,6 +1,19 @@
 "use client"
 
-import { Loader2, Check, Search, Clock, Wrench, X } from "lucide-react"
+import {
+  Loader2,
+  Check,
+  Search,
+  Clock,
+  Wrench,
+  X,
+  PencilRuler,
+  FileCode2,
+  Eye,
+  Code2,
+  Network,
+  PenLine,
+} from "lucide-react"
 import type { ComponentType } from "react"
 
 export interface Step {
@@ -15,6 +28,13 @@ export interface Step {
 const ICONS: Record<string, ComponentType<{ className?: string }>> = {
   web_search: Search,
   get_datetime: Clock,
+  build_app: Code2,
+  design: PencilRuler,
+  write_file: FileCode2,
+  preview: Eye,
+  spawn_agents: Network,
+  create_draft: PenLine,
+  update_draft: PenLine,
 }
 
 // The live "agent is doing things" panel shown above an assistant message.

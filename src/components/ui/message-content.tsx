@@ -13,6 +13,7 @@ import { PdfBlock } from "@/components/ui/pdf-block"
 import { ExcelBlock } from "@/components/ui/excel-block"
 import { QuestionsBlock } from "@/components/ui/questions-block"
 import { PlanBlock } from "@/components/ui/plan-block"
+import { CodeBlock } from "@/components/ui/code-block"
 
 export type Visual = {
   kind: "mermaid" | "svg" | "threejs" | "chart" | "ppt" | "pdf" | "excel"
@@ -136,7 +137,7 @@ export function MessageContent({
             if (!className && !text.includes("\n")) {
               return (
                 <code
-                  className="rounded bg-secondary px-1.5 py-0.5 text-[13px] font-mono text-foreground"
+                  className="rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 text-[0.85em] font-mono text-foreground"
                   {...props}
                 >
                   {children}
@@ -144,39 +145,60 @@ export function MessageContent({
               )
             }
 
-            return (
-              <pre className="my-3 overflow-x-auto rounded-lg border border-border bg-card p-4">
-                <code className="text-[13px] font-mono text-foreground/90" {...props}>
-                  {children}
-                </code>
-              </pre>
-            )
+            return <CodeBlock code={text} lang={lang} />
           },
-          p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+          // pre is a passthrough — the code renderer owns block rendering, so we
+          // avoid an extra default <pre> wrapping our framed blocks.
+          pre: ({ children }) => <>{children}</>,
+          p: ({ children }) => <p className="mb-4 leading-[1.7] last:mb-0">{children}</p>,
           ul: ({ children }) => (
-            <ul className="mb-3 list-disc space-y-1 pl-5">{children}</ul>
+            <ul className="my-4 list-disc space-y-1.5 pl-5 marker:text-white/35">{children}</ul>
           ),
           ol: ({ children }) => (
-            <ol className="mb-3 list-decimal space-y-1 pl-5">{children}</ol>
+            <ol className="my-4 list-decimal space-y-1.5 pl-5 marker:text-white/35">{children}</ol>
           ),
+          li: ({ children }) => <li className="leading-[1.65] pl-1">{children}</li>,
           a: ({ children, href }) => (
             <a
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-foreground underline underline-offset-2"
+              className="font-medium text-foreground underline decoration-white/25 underline-offset-[3px] transition-colors hover:decoration-white"
             >
               {children}
             </a>
           ),
+          strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
           h1: ({ children }) => (
-            <h1 className="mb-2 mt-4 text-xl font-semibold">{children}</h1>
+            <h1 className="mb-3 mt-6 text-[1.35em] font-semibold tracking-tight first:mt-0">{children}</h1>
           ),
           h2: ({ children }) => (
-            <h2 className="mb-2 mt-4 text-lg font-semibold">{children}</h2>
+            <h2 className="mb-2.5 mt-5 text-[1.15em] font-semibold tracking-tight first:mt-0">{children}</h2>
           ),
           h3: ({ children }) => (
-            <h3 className="mb-2 mt-3 text-base font-semibold">{children}</h3>
+            <h3 className="mb-2 mt-4 text-[1.02em] font-semibold first:mt-0">{children}</h3>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote className="my-4 border-l-2 border-white/20 pl-4 italic text-foreground/65">
+              {children}
+            </blockquote>
+          ),
+          hr: () => <hr className="my-6 border-white/10" />,
+          table: ({ children }) => (
+            <div className="my-4 overflow-x-auto rounded-xl border border-white/10">
+              <table className="w-full border-collapse text-[13.5px]">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="bg-white/[0.03]">{children}</thead>,
+          th: ({ children }) => (
+            <th className="border-b border-white/10 px-3.5 py-2.5 text-left font-medium text-foreground/70">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="border-b border-white/[0.06] px-3.5 py-2.5 align-top text-foreground/85">
+              {children}
+            </td>
           ),
         }}
       >

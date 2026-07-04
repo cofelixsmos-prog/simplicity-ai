@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Poppins, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { GlassPointer } from "@/components/ui/glass-pointer";
+import { Toaster } from "@/components/ui/toast";
+import { NightMode } from "@/components/ui/night-mode";
 
 const poppins = Poppins({
   variable: "--font-sans",
@@ -29,7 +32,12 @@ export default function RootLayout({
       lang="en"
       className={`dark ${poppins.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <GlassPointer />
+        {children}
+        <Toaster />
+        <NightMode />
+      </body>
     </html>
   );
 }

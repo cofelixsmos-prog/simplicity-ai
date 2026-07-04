@@ -12,6 +12,20 @@ export const drafts = sqliteTable("drafts", {
 
 export type Draft = typeof drafts.$inferSelect
 
+// A multi-file frontend project the coding agent builds and the user can edit
+// live (with an in-browser preview). `files` is a JSON array of { name, content };
+// `entry` names the file the preview boots from (usually index.html).
+export const apps = sqliteTable("apps", {
+  id: text("id").primaryKey(),
+  title: text("title").notNull(),
+  files: text("files").notNull(), // JSON: { name: string; content: string }[]
+  entry: text("entry").notNull(),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+})
+
+export type App = typeof apps.$inferSelect
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),

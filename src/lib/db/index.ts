@@ -23,6 +23,9 @@ export function initDb(): Promise<void> {
         `CREATE TABLE IF NOT EXISTS drafts (
           id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL,
           created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )`,
+        `CREATE TABLE IF NOT EXISTS apps (
+          id TEXT PRIMARY KEY, title TEXT NOT NULL, files TEXT NOT NULL, entry TEXT NOT NULL,
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )`,
         `CREATE TABLE IF NOT EXISTS users (
           id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT,
           password_hash TEXT NOT NULL, created_at INTEGER NOT NULL )`,

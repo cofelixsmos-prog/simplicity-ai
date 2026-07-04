@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react"
 import {
   ArrowUp,
-  Loader2,
+  ArrowDown,
+  Square,
   Check,
   Copy,
   Plus,
@@ -19,6 +20,7 @@ import {
   BookOpen,
   Command as CommandIcon,
   MessageSquare,
+  Moon,
   Trash2,
   LogOut,
 } from "lucide-react"
@@ -28,11 +30,18 @@ import { AgentSwarm, type AgentCard } from "@/components/ui/agent-swarm"
 import { AgentPanel } from "@/components/ui/agent-panel"
 import { VisualPanel } from "@/components/ui/visual-panel"
 import { DraftCanvas, type DraftData } from "@/components/ui/draft-canvas"
+import { CodeCanvas, type AppData } from "@/components/ui/code-canvas"
+import { StatusBoard } from "@/components/ui/status-board"
 import { CommandPalette, type Command } from "@/components/ui/command-palette"
 import { type ConvoLite } from "@/components/ui/chat-sidebar"
 import { ReasoningAura } from "@/components/ui/reasoning-aura"
-import { ShaderBackground } from "@/components/ui/shader-background"
+import { ShaderBackground, type BgStatus } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
+import { Splash } from "@/components/ui/splash"
+import { WelcomeOverlay } from "@/components/ui/welcome-overlay"
+import { Tooltip } from "@/components/ui/tooltip"
+import { toast } from "@/components/ui/toast"
+import { playSend, playDone, playType, playBackspace } from "@/lib/sound"
 import { MODELS, DEFAULT_MODEL_ID, getModel } from "@/lib/models"
 
 interface Message {
@@ -125,11 +134,24 @@ export default function ChatPage() {
   const [modelMenu, setModelMenu] = useState(false)
   const [panelVisual, setPanelVisual] = useState<Visual | null>(null)
   const [panelDraft, setPanelDraft] = useState<DraftData | null>(null)
+  const [panelApp, setPanelApp] = useState<AppData | null>(null)
   // Index of the message whose sub-agents are shown (live) in the side panel.
   const [agentPanelIdx, setAgentPanelIdx] = useState<number | null>(null)
   const [auraTrigger, setAuraTrigger] = useState(0)
   const [greeting, setGreeting] = useState("")
   const [thinking, setThinking] = useState(false)
+  // Ambient background status: gray by default, a red wash on error, a green
+  // wash when a turn finishes cleanly — then it settles back to gray.
+  const [bgStatus, setBgStatus] = useState<BgStatus>("idle")
+  // Downtime experience shown on error: red shader → "take a break" notice →
+  // Snake with a 5-min timer → green "return to work" → back to gray.
+  const [downtime, setDowntime] = useState(false)
+  const [showNotice, setShowNotice] = useState(false)
+  const [showBoard, setShowBoard] = useState(false)
+  const [returnMsg, setReturnMsg] = useState(false)
+  const [errorNote, setErrorNote] = useState("")
+  const [failedModel, setFailedModel] = useState<string | undefined>(undefined)
+  const dtTimers = useRef<ReturnType<typeof setTimeout>[]>([])
   // Track which assistant message indices have had their questions answered / plan decided.
   const [answeredIdx, setAnsweredIdx] = useState<Set<number>>(new Set())
   const [planDecisions, setPlanDecisions] = useState<Record<number, "approved" | "denied">>({})
@@ -137,6 +159,7 @@ export default function ChatPage() {
   const [user, setUser] = useState<{ email: string; name: string | null } | null | undefined>(undefined)
   const [conversations, setConversations] = useState<ConvoLite[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
+  const [showWelcome, setShowWelcome] = useState(false)
 
   // Compute greeting on the client only (avoids SSR/hydration mismatch).
   useEffect(() => {
@@ -154,6 +177,14 @@ export default function ChatPage() {
           return
         }
         setUser({ email: d.user.email, name: d.user.name })
+        // Show the welcome-back moment only right after a fresh login/register —
+        // not on every reload or internal navigation back to /chat.
+        try {
+          if (sessionStorage.getItem("sx-just-logged-in")) {
+            sessionStorage.removeItem("sx-just-logged-in")
+            setShowWelcome(true)
+          }
+        } catch {}
         const cr = await fetch("/api/conversations")
         if (cr.ok) setConversations((await cr.json()).conversations ?? [])
       } catch {
@@ -170,11 +201,44 @@ export default function ChatPage() {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Whether the view is pinned to the bottom. Stays true while the user is near
+  // the end; goes false the moment they scroll up to read — so streaming never
+  // yanks them back down mid-read. This is the difference between calm and jittery.
+  const atBottomRef = useRef(true)
+  const [showJump, setShowJump] = useState(false)
+  // Abort control for the streaming request (the Stop button).
+  const abortRef = useRef<AbortController | null>(null)
+  const stoppedRef = useRef(false)
 
   const model = getModel(modelId)
 
+  const onScroll = () => {
+    const el = scrollRef.current
+    if (!el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+    atBottomRef.current = atBottom
+    setShowJump(!atBottom && el.scrollHeight - el.clientHeight > 240)
+  }
+
+  const jumpToBottom = () => {
+    const el = scrollRef.current
+    if (!el) return
+    atBottomRef.current = true
+    setShowJump(false)
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
+  }
+
+  const stop = () => {
+    stoppedRef.current = true
+    abortRef.current?.abort()
+  }
+
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
+    const el = scrollRef.current
+    if (!el || !atBottomRef.current) return
+    // Instant during streaming (avoids smooth-scroll jitter on every token);
+    // a single gentle glide once the turn settles.
+    el.scrollTo({ top: el.scrollHeight, behavior: loading ? "auto" : "smooth" })
   }, [messages, loading])
 
   useEffect(() => {
@@ -184,9 +248,62 @@ export default function ChatPage() {
     el.style.height = Math.min(el.scrollHeight, 180) + "px"
   }, [input])
 
+  // ── Downtime experience orchestration ──────────────────────────────────────
+  const clearDtTimers = () => {
+    dtTimers.current.forEach(clearTimeout)
+    dtTimers.current = []
+  }
+  const later = (fn: () => void, ms: number) => {
+    dtTimers.current.push(setTimeout(fn, ms))
+  }
+
+  // On error: red shader + fade the chat + a notice, then reveal the break game.
+  const startDowntime = (model?: string) => {
+    if (downtime) return
+    clearDtTimers()
+    setFailedModel(model ?? modelId)
+    setErrorNote(collapseMessage())
+    setBgStatus("error")
+    setDowntime(true)
+    setShowNotice(false) // start hidden so the fade-IN actually plays (not a pop)
+    setShowBoard(false)
+    setReturnMsg(false)
+    later(() => setShowNotice(true), 450) // slow fade-in once the overlay has mounted
+    later(() => setShowNotice(false), 8500) // hold a good while, then fade out
+    later(() => {
+      setBgStatus("idle") // red fades back to gray once the text is gone…
+      setShowBoard(true) // …and the status board fades in
+    }, 10500)
+  }
+
+  // The status board detected everything is back: green acknowledgment, then
+  // fade the chat back in so the user is returned to their work automatically.
+  const handleRecover = () => {
+    clearDtTimers()
+    setShowBoard(false)
+    setBgStatus("success")
+    setReturnMsg(true)
+    later(() => {
+      setReturnMsg(false)
+      setBgStatus("idle")
+    }, 5000)
+    later(() => setDowntime(false), 5800) // chat fades back in
+  }
+
+  // Leave the break (close button, or starting a new chat): restore the chat.
+  const closeDowntime = () => {
+    clearDtTimers()
+    setShowBoard(false)
+    setShowNotice(false)
+    setReturnMsg(false)
+    setBgStatus("idle")
+    setDowntime(false)
+  }
+
   const copy = async (text: string, idx: number) => {
     await navigator.clipboard.writeText(text)
     setCopiedIdx(idx)
+    toast("Copied to clipboard", "success")
     setTimeout(() => setCopiedIdx(null), 1500)
   }
 
@@ -195,8 +312,10 @@ export default function ChatPage() {
     setInput("")
     setPanelVisual(null)
     setPanelDraft(null)
+    setPanelApp(null)
     setAgentPanelIdx(null)
     setConversationId(null)
+    closeDowntime()
   }
 
   const refreshConversations = async () => {
@@ -210,6 +329,7 @@ export default function ChatPage() {
     if (loading) return
     setPanelVisual(null)
     setPanelDraft(null)
+    setPanelApp(null)
     setAgentPanelIdx(null)
     try {
       const res = await fetch(`/api/conversations/${id}`)
@@ -244,6 +364,11 @@ export default function ChatPage() {
     const trimmed = text.trim()
     if (!trimmed || loading) return
 
+    atBottomRef.current = true // sending returns focus to the latest turn
+    stoppedRef.current = false
+    playSend()
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
     const next: Message[] = [...messages, { role: "user", content: trimmed }]
     setMessages(next)
     setInput("")
@@ -284,9 +409,11 @@ export default function ChatPage() {
           model: modelId,
           reasoning: model.supportsReasoning ? reasoning : "off",
         }),
+        signal: ctrl.signal,
       })
 
       if (!res.ok || !res.body) {
+        startDowntime()
         setMessages((m) => {
           const copy = [...m]
           copy[copy.length - 1] = { role: "assistant", content: collapseMessage() }
@@ -340,6 +467,8 @@ export default function ChatPage() {
             task?: string
             summary?: string
             agentId?: string
+            files?: { name: string; content: string }[]
+            entry?: string
           }
           try {
             ev = JSON.parse(t)
@@ -383,11 +512,23 @@ export default function ChatPage() {
           } else if (ev.t === "draft") {
             // The agent opened/updated a draft — show it in the editable canvas.
             setPanelVisual(null)
+            setPanelApp(null)
             setAgentPanelIdx(null)
             setPanelDraft({
               id: ev.id ?? "",
               title: ev.title ?? "Untitled draft",
               content: ev.content ?? "",
+            })
+          } else if (ev.t === "code") {
+            // The coding agent built/rebuilt an app — open it in the code canvas.
+            setPanelVisual(null)
+            setPanelDraft(null)
+            setAgentPanelIdx(null)
+            setPanelApp({
+              id: ev.id ?? "",
+              title: ev.title ?? "Untitled app",
+              files: Array.isArray(ev.files) ? ev.files : [],
+              entry: ev.entry ?? "",
             })
           } else if (ev.t === "text") {
             acc += ev.v ?? ""
@@ -408,6 +549,7 @@ export default function ChatPage() {
             flush()
           } else if (ev.t === "error") {
             setThinking(false)
+            startDowntime()
             const friendly = collapseMessage()
             setMessages((m) => {
               const copy = [...m]
@@ -418,6 +560,9 @@ export default function ChatPage() {
           }
         }
       }
+
+      // The turn finished cleanly — one low, warm settle.
+      if (!stoppedRef.current && acc.trim()) playDone()
 
       // Persist the assistant's final answer, then refresh the sidebar order.
       if (convoId && acc.trim()) {
@@ -430,12 +575,17 @@ export default function ChatPage() {
           .catch(() => {})
       }
     } catch {
-      setMessages((m) => {
-        const copy = [...m]
-        copy[copy.length - 1] = { role: "assistant", content: collapseMessage() }
-        return copy
-      })
+      // A user-initiated stop is not an error — keep whatever streamed so far.
+      if (!stoppedRef.current) {
+        startDowntime()
+        setMessages((m) => {
+          const copy = [...m]
+          copy[copy.length - 1] = { role: "assistant", content: collapseMessage() }
+          return copy
+        })
+      }
     } finally {
+      abortRef.current = null
       setLoading(false)
       setThinking(false)
     }
@@ -503,6 +653,14 @@ export default function ChatPage() {
       run: () => prefill("Write an essay about "),
     },
     {
+      id: "p-app",
+      group: "Start",
+      label: "Build an app",
+      icon: Code2,
+      keywords: "code build website ui app frontend react",
+      run: () => prefill("Build an app that "),
+    },
+    {
       id: "p-diagram",
       group: "Start",
       label: "Create a diagram",
@@ -529,6 +687,7 @@ export default function ChatPage() {
           run: () => chooseReasoning(r),
         }))
       : []),
+    { id: "night", group: "Actions", label: "Toggle Night mode", icon: Moon, keywords: "dark warm dim evening night", run: () => window.dispatchEvent(new Event("toggle-night")) },
     { id: "go-home", group: "Go to", label: "Home", icon: Home, run: () => (window.location.href = "/") },
     { id: "go-dev", group: "Go to", label: "Developers", icon: Code2, run: () => (window.location.href = "/developers") },
     { id: "go-res", group: "Go to", label: "Resources", icon: BookOpen, run: () => (window.location.href = "/resources") },
@@ -540,20 +699,25 @@ export default function ChatPage() {
 
   const empty = messages.length === 0
 
-  // While auth resolves, show a minimal loader (redirects to /login if signed out).
-  if (user === undefined) {
-    return (
-      <div className="flex h-dvh items-center justify-center bg-background">
-        <Loader2 className="size-5 animate-spin text-white/40" />
-      </div>
-    )
-  }
+  // While auth resolves, show the branded splash (redirects to /login if signed out).
+  if (user === undefined) return <Splash />
+
+  // The world recedes while there's something to read: a panel open, a
+  // sub-agent view, or an answer streaming in.
+  const calmBg =
+    showWelcome || !!panelApp || !!panelDraft || !!panelVisual || agentPanelIdx !== null || (loading && !downtime)
+
+  const firstName = user?.name?.trim().split(/\s+/)[0] || user?.email?.split("@")[0] || ""
 
   return (
     <div className="relative flex h-dvh">
-      {/* Same animated shader background as the landing page */}
-      <ShaderBackground fixed />
+      {/* Same animated shader background as the landing page — tinted by app status */}
+      <ShaderBackground fixed status={bgStatus} calm={calmBg} />
       <LiquidGlassFilters />
+
+      {/* Welcome-back moment: glass card breathes in over the shader, holds,
+          then dissolves to reveal the chat — same background throughout. */}
+      {showWelcome && <WelcomeOverlay name={firstName} onDone={() => setShowWelcome(false)} />}
 
       {/* ⌘K command palette */}
       <CommandPalette commands={commands} />
@@ -563,6 +727,12 @@ export default function ChatPage() {
 
       {/* ── Chat column ── */}
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">
+        {/* Everything in the chat column fades out during the downtime experience */}
+        <div
+          className={`flex min-h-0 flex-1 flex-col transition-opacity duration-[1500ms] ${
+            downtime ? "pointer-events-none opacity-0" : "opacity-100"
+          }`}
+        >
         {/* Minimal floating top: just the brand + new chat */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 py-4">
           <a
@@ -572,36 +742,38 @@ export default function ChatPage() {
             <span className="size-1.5 rounded-full bg-white/80" />
             Simplicity
           </a>
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={() => window.dispatchEvent(new Event("open-cmdk"))}
-              aria-label="Open command palette"
-              title="Command palette"
-              className="pointer-events-auto inline-flex items-center gap-1 rounded-full border border-white/10 px-2.5 py-1.5 text-[11px] font-medium text-white/50 transition-colors hover:bg-white/10 hover:text-white"
-            >
-              <CommandIcon className="size-3.5" />
-              <span className="font-mono">K</span>
-            </button>
-            {!empty && (
+          <div className="pointer-events-auto flex items-center gap-1.5">
+            <Tooltip label="Command palette" side="bottom">
               <button
-                onClick={reset}
-                aria-label="New chat"
-                title="New chat"
-                className="pointer-events-auto inline-flex size-9 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                onClick={() => window.dispatchEvent(new Event("open-cmdk"))}
+                aria-label="Open command palette"
+                className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2.5 py-1.5 text-[11px] font-medium text-white/50 transition-colors hover:bg-white/10 hover:text-white"
               >
-                <Plus className="size-4" />
+                <CommandIcon className="size-3.5" />
+                <span className="font-mono">K</span>
               </button>
+            </Tooltip>
+            {!empty && (
+              <Tooltip label="New chat" side="bottom">
+                <button
+                  onClick={reset}
+                  aria-label="New chat"
+                  className="inline-flex size-9 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+                >
+                  <Plus className="size-4" />
+                </button>
+              </Tooltip>
             )}
           </div>
         </div>
 
         {/* Messages (only once a conversation has started) */}
         {!empty && (
-          <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-smooth">
+          <div ref={scrollRef} onScroll={onScroll} className="chat-start flex-1 overflow-y-auto">
             <div className="mx-auto w-full max-w-3xl px-4 pb-10 pt-20">
               <div className="space-y-8">
                 {messages.map((m, i) => (
-                  <div key={i} className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+                  <div key={i} className={m.role === "user" ? "msg-in-user" : "msg-in-ai"}>
                     {m.role === "user" ? (
                       <div className="flex justify-end">
                         <div className="liquid-glass max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 text-[15px] leading-relaxed text-white">
@@ -625,6 +797,7 @@ export default function ChatPage() {
                               onOpen={() => {
                                 setPanelDraft(null)
                                 setPanelVisual(null)
+                                setPanelApp(null)
                                 setAgentPanelIdx(i)
                               }}
                             />
@@ -636,6 +809,7 @@ export default function ChatPage() {
                                 streaming={loading && i === messages.length - 1}
                                 onExpand={(v) => {
                                   setPanelDraft(null)
+                                  setPanelApp(null)
                                   setAgentPanelIdx(null)
                                   setPanelVisual(v)
                                 }}
@@ -659,18 +833,15 @@ export default function ChatPage() {
                               )}
                             </>
                           ) : thinking && i === messages.length - 1 ? (
+                            // One calm, breathing indicator — same motion language everywhere.
                             <div className="flex items-center gap-2 pt-1">
-                              <span className="size-3.5 animate-spin rounded-full border-2 border-white/20 border-t-white/70" />
-                              <span className="animate-pulse text-sm text-white/60">
-                                Thinking…
-                              </span>
+                              <span className="size-2 animate-pulse rounded-full bg-white/55" />
+                              <span className="animate-pulse text-sm text-white/55">Thinking…</span>
                             </div>
                           ) : (m.steps && m.steps.length > 0) ||
                             (m.agents && m.agents.length > 0) ? null : (
-                            <div className="flex items-center gap-1.5 pt-1">
-                              <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
-                              <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
-                              <span className="size-1.5 animate-bounce rounded-full bg-muted-foreground" />
+                            <div className="flex items-center pt-1">
+                              <span className="size-2 animate-pulse rounded-full bg-white/55" />
                             </div>
                           )}
                         </div>
@@ -681,6 +852,17 @@ export default function ChatPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Scroll-to-bottom pill — appears when you've scrolled up mid-conversation */}
+        {!empty && showJump && (
+          <button
+            onClick={jumpToBottom}
+            aria-label="Scroll to latest"
+            className="liquid-glass absolute bottom-32 left-1/2 z-20 inline-flex size-9 -translate-x-1/2 items-center justify-center rounded-full text-white/80 shadow-[0_10px_30px_-8px_rgba(0,0,0,0.7)] animate-in fade-in zoom-in-90 duration-200 hover:text-white"
+          >
+            <ArrowDown className="size-4" strokeWidth={2.25} />
+          </button>
         )}
 
         {/* Composer — centered hero when empty, pinned to bottom in a chat */}
@@ -705,13 +887,14 @@ export default function ChatPage() {
             </div>
           )}
           <form
+            key={empty ? "hero" : "docked"} // remount on first send so the glass drop-in replays as the composer re-docks
             onSubmit={(e) => {
               e.preventDefault()
               send(input)
             }}
             className={empty ? "w-full max-w-2xl" : "mx-auto w-full max-w-3xl"}
           >
-            <div className="liquid-glass flex w-full flex-col gap-2 rounded-[28px] px-4 pb-2.5 pt-3 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.6)] transition-all duration-300 ease-out focus-within:border-white/25 focus-within:shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_24px_64px_-16px_rgba(0,0,0,0.75)]">
+            <div className="glass-in liquid-glass flex w-full flex-col gap-2 rounded-[28px] px-4 pb-2.5 pt-3 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.6)] transition-all duration-300 ease-out focus-within:border-white/25 focus-within:shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_24px_64px_-16px_rgba(0,0,0,0.75)]">
               {/* input row */}
               <textarea
                 ref={textareaRef}
@@ -721,11 +904,18 @@ export default function ChatPage() {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault()
                     send(input)
+                    return
                   }
+                  // Tactile typing feedback — skip modifier combos and
+                  // navigation/control keys so only actual edits tick.
+                  if (e.ctrlKey || e.metaKey || e.altKey) return
+                  if (e.key === "Backspace" || e.key === "Delete") playBackspace()
+                  else if (e.key.length === 1) playType()
                 }}
                 rows={1}
+                autoFocus
                 placeholder="Ask Simplicity anything…"
-                className="max-h-52 min-h-[28px] w-full resize-none bg-transparent px-1 py-1 text-base leading-relaxed text-white placeholder:text-white/40 focus:outline-none"
+                className="max-h-52 min-h-[28px] w-full resize-none bg-transparent px-1 py-1 text-base leading-relaxed text-white placeholder:text-white/40 transition-[height] duration-150 ease-out focus:outline-none"
               />
 
               {/* toolbar row: controls left, send right */}
@@ -806,29 +996,73 @@ export default function ChatPage() {
                   )}
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={loading || !input.trim()}
-                  aria-label="Send"
-                  className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 disabled:scale-100 disabled:opacity-30"
-                >
-                  {loading ? <Loader2 className="size-5 animate-spin" /> : <ArrowUp className="size-5" strokeWidth={2.5} />}
-                </button>
+                {loading ? (
+                  <button
+                    type="button"
+                    onClick={stop}
+                    aria-label="Stop generating"
+                    className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105"
+                  >
+                    <Square className="size-4" fill="currentColor" strokeWidth={0} />
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!input.trim()}
+                    aria-label="Send"
+                    className="flex size-10 shrink-0 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 disabled:scale-100 disabled:opacity-30"
+                  >
+                    <ArrowUp className="size-5" strokeWidth={2.5} />
+                  </button>
+                )}
               </div>
             </div>
             <p className="mt-2.5 text-center text-xs text-white/40">Simplicity can make mistakes.</p>
           </form>
         </div>
+        </div>
+        {/* ── Downtime experience overlay (notice → break game → return message) ── */}
+        {downtime && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center px-4">
+            <div
+              className={`pointer-events-none absolute px-6 text-center transition-opacity duration-[2000ms] ease-out ${
+                showNotice ? "opacity-100" : "opacity-0"
+              }`}
+            >
+              <p className="text-3xl font-semibold tracking-tight text-white sm:text-5xl">
+                Take a break for now, Simplicity is down.
+              </p>
+              <p className="mt-4 text-sm text-white/45">{errorNote}</p>
+            </div>
+
+            {showBoard && (
+              <div className="animate-in fade-in duration-[1400ms]">
+                <StatusBoard failedModel={failedModel} onClose={closeDowntime} onRecover={handleRecover} />
+              </div>
+            )}
+
+            <div
+              className={`pointer-events-none absolute top-[12%] px-6 text-center transition-opacity duration-[1600ms] ease-out ${
+                returnMsg ? "opacity-100" : "opacity-0"
+              }`}
+            >
+              <p className="text-3xl font-semibold tracking-tight text-white sm:text-4xl">Return to your work.</p>
+              <p className="mt-3 text-[15px] text-white/55">Thank you for your patience.</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Right side pane: agents / draft / visual ── */}
       {(() => {
         const agentMsg = agentPanelIdx !== null ? messages[agentPanelIdx] : null
         const showAgents = !!agentMsg?.agents?.length
-        const open = showAgents || !!panelDraft || !!panelVisual
+        const open = showAgents || !!panelDraft || !!panelApp || !!panelVisual
         if (!open) return null
         const body = showAgents ? (
           <AgentPanel agents={agentMsg!.agents!} onClose={() => setAgentPanelIdx(null)} />
+        ) : panelApp ? (
+          <CodeCanvas app={panelApp} onClose={() => setPanelApp(null)} />
         ) : panelDraft ? (
           <DraftCanvas draft={panelDraft} onClose={() => setPanelDraft(null)} />
         ) : panelVisual ? (
@@ -836,8 +1070,8 @@ export default function ChatPage() {
         ) : null
         return (
           <>
-            <div className="relative z-10 hidden w-[44%] max-w-[640px] shrink-0 p-3 md:block animate-in fade-in slide-in-from-right-4 duration-500 ease-out">
-              <div className="liquid-glass liquid-glass-soft h-full overflow-hidden rounded-2xl">{body}</div>
+            <div className="relative z-10 hidden w-[44%] max-w-[640px] shrink-0 p-3 md:block animate-in fade-in zoom-in-95 slide-in-from-right-2 duration-500 ease-[cubic-bezier(0.34,1.56,0.64,1)]">
+              <div className="liquid-glass liquid-glass-soft glass-float h-full overflow-hidden rounded-[var(--glass-radius)]">{body}</div>
             </div>
             <div className="fixed inset-0 z-40 bg-background/80 backdrop-blur-xl md:hidden animate-in fade-in slide-in-from-bottom-6 duration-300 ease-out">
               {body}
