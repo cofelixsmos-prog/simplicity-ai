@@ -26,12 +26,34 @@ export const apps = sqliteTable("apps", {
 
 export type App = typeof apps.$inferSelect
 
+// A file the user uploaded (currently PDFs) kept so it can be attached to an
+// email later. Bytes are stored base64 in `data`. Rows are pruned after a day
+// (see repo.pruneOldUploads) so this never grows unbounded.
+export const uploads = sqliteTable("uploads", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  name: text("name").notNull(),
+  mime: text("mime").notNull(),
+  data: text("data").notNull(), // base64-encoded file bytes
+  createdAt: integer("created_at").notNull(),
+})
+
+export type Upload = typeof uploads.$inferSelect
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 export const users = sqliteTable("users", {
   id: text("id").primaryKey(),
   email: text("email").notNull().unique(),
   name: text("name"),
   passwordHash: text("password_hash").notNull(),
+  // Custom "rules" the user wrote at sign-up — folded into the chat system prompt.
+  systemPrompt: text("system_prompt"),
+  // JSON blob of UserSettings (autoNight / autoMorning). See src/lib/settings.ts.
+  settings: text("settings"),
+  // Optional Gmail SMTP connection for sending email. The address is plaintext;
+  // the App Password is encrypted at rest (AES-256-GCM, see src/lib/crypto.ts).
+  gmailAddress: text("gmail_address"),
+  gmailAppPassword: text("gmail_app_password"),
   createdAt: integer("created_at").notNull(),
 })
 

@@ -71,7 +71,6 @@ export function StatusBoard({
     } catch {
       /* leave prior data; the outage is the point */
     } finally {
-      setChecking(false)
       setNextIn(POLL_MS / 1000)
     }
   }, [onRecover])

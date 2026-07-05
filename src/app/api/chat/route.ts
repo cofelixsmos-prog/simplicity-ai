@@ -1,6 +1,7 @@
 import { getModel, DEFAULT_MODEL_ID, type ReasoningEffort } from "@/lib/models"
 import { TOOLS, TOOL_SCHEMAS, type ToolCtx, type ToolSchema, type ModelMessage } from "@/lib/agent/tools"
 import { corsHeaders, jsonResponse, preflight, clientIp, rateLimit } from "@/lib/api/http"
+import { getCurrentUserRow } from "@/lib/auth"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -93,6 +94,7 @@ You have REAL tools. Call them instead of guessing or saying you can't access li
 - create_draft — whenever the user asks you to WRITE something long-form (an essay, article, blog post, cover letter, story, report copy), call this with the full Markdown in the "content" argument. It opens an editable document for the user instead of dumping the whole thing in chat. Then give a one-line summary in chat.
 - update_draft — revise a draft you already created, by its id.
 - build_app — the tool that actually writes code. It hands a "title" + a detailed "spec" to a dedicated coding engine that produces the full multi-file project (HTML/CSS/JS or React) and opens it in a live, editable preview canvas. NEVER write code by hand in chat — always go through build_app. (In the coding workflow below you normally call this from inside a coder sub-agent, not directly.)
+- prepare_email — when the user asks to email / send / mail something to someone, call this with one entry per recipient (a real "to" address, a professional "subject", and a plain-text "body"). It opens an approval card in chat; it does NOT send — the user reviews and clicks Send. For a batch ("email each client their invoice"), add one entry per recipient. NEVER invent an email address — if you don't have a real one, ask. If the user says "draft but don't send", still call prepare_email (the card is the draft; they simply won't click Send). Email availability is stated below; if Gmail isn't connected, tell the user to connect it (Settings → Connect Gmail) instead of calling the tool.
 - spawn_agents — delegate to a team of focused sub-agents that run in parallel. YOU decide how many (1–3), name each, set its kind (research / writer / coder / general), and give each a clear self-contained task. Research agents search the web, writer agents produce documents, coder agents call build_app. When they finish you'll get their results to synthesize. CRITICAL: never call spawn_agents with an empty list — if you call it, it must contain at least one real agent with a concrete task.
 
 # CODING WORKFLOW (when the user asks you to build / code / make a website, app, page, UI, game, or tool)
@@ -333,11 +335,24 @@ export async function POST(request: Request) {
   let messages: ChatMessage[]
   let modelId: string | undefined
   let reasoning: ReasoningEffort | "off" = "off"
+  let userRules = ""
+  let turnAttachments: { id: string; name: string }[] = []
   try {
     const body = await request.json()
     messages = body.messages
     modelId = body.model
     if (body.reasoning) reasoning = body.reasoning
+    // The custom "rules" the user set at sign-up (client forwards it from the
+    // authenticated profile). Bounded so it can't blow the context window.
+    if (typeof body.systemPrompt === "string") userRules = body.systemPrompt.slice(0, 2000).trim()
+    // Files uploaded this turn — passed to prepare_email so it can attach them.
+    if (Array.isArray(body.attachments))
+      turnAttachments = body.attachments
+        .filter((a: unknown): a is { id: string; name: string } => {
+          const o = a as { id?: unknown; name?: unknown }
+          return !!o && typeof o.id === "string" && typeof o.name === "string"
+        })
+        .slice(0, 10)
     if (!Array.isArray(messages)) throw new Error("messages must be an array")
   } catch {
     return jsonResponse({ error: "Invalid request body." }, { status: 400 }, request)
@@ -354,6 +369,11 @@ export async function POST(request: Request) {
     return jsonResponse({ error: "No valid messages." }, { status: 400 }, request)
   if (messages.reduce((n, m) => n + m.content.length, 0) > MAX_TOTAL_CHARS)
     return jsonResponse({ error: "Conversation too large." }, { status: 413 }, request)
+
+  // Authoritative Gmail state comes from the session, not the client claim — the
+  // full row (with the encrypted App Password) powers the IMAP-backed tools.
+  const userRow = await getCurrentUserRow()
+  const gmailConnected = !!userRow?.gmailAppPassword
 
   const model = getModel(modelId)
   const binding = getBinding(modelId)
@@ -390,9 +410,28 @@ export async function POST(request: Request) {
     }
   }
 
+  // State the email capability so the model knows which email tools are usable.
+  const emailStatus = gmailConnected
+    ? "\n\n# EMAIL & INBOX\nThe user has connected Gmail. You can:\n" +
+      "- prepare_email — draft email(s) to SEND (opens an approval card; the user clicks Send, you never send directly).\n" +
+      "- read_emails — read or search their inbox (get each email's id here before replying/deleting/modifying).\n" +
+      "- delete_emails — move emails to Trash (opens a confirmation card; recoverable; the user must confirm).\n" +
+      "- modify_emails — mark read/unread, star/unstar, or archive (reversible, applied immediately).\n" +
+      "- save_draft — save a draft into Gmail Drafts (does not send).\n" +
+      "To REPLY or FORWARD: call read_emails first, then prepare_email with an appropriate body. Only use real ids " +
+      "returned by read_emails — never guess an id. Everything is on the user's own account."
+    : "\n\n# EMAIL & INBOX\nThe user has NOT connected Gmail. Do NOT call any email/inbox tools. If they ask to send, read, or manage email, tell them to connect Gmail first (⌘K → Connect Gmail, using a Google App Password)."
+
+  // Append the user's own rules as a clearly-fenced section the base prompt
+  // must honor (without letting it override the core safety/format rules).
+  const base = SYSTEM_PROMPT + emailStatus
+  const systemContent = userRules
+    ? `${base}\n\n# USER RULES (set by this user — follow them unless they conflict with the rules above)\n${userRules}`
+    : base
+
   // The running conversation the loop appends to (system + history + tool turns).
   const convo: Record<string, unknown>[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemContent },
     ...messages.map((m) => ({ role: m.role, content: m.content })),
   ]
 
@@ -465,7 +504,7 @@ export async function POST(request: Request) {
     async start(controller) {
       const emit = (ev: Record<string, unknown>) =>
         controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"))
-      const toolCtx: ToolCtx = { emit, complete, completeCoder }
+      const toolCtx: ToolCtx = { emit, complete, completeCoder, attachments: turnAttachments, user: userRow ?? undefined }
 
       try {
         for (let step = 0; step < MAX_STEPS; step++) {

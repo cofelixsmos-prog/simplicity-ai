@@ -8,7 +8,8 @@
 import { randomUUID } from "crypto"
 import { eq } from "drizzle-orm"
 import { db, initDb } from "@/lib/db"
-import { drafts, apps } from "@/lib/db/schema"
+import { drafts, apps, type User } from "@/lib/db/schema"
+import { listMessages, modifyMessages, saveDraft, friendlyImapError, type ModifyAction } from "@/lib/imap"
 
 export interface ToolSchema {
   type: "function"
@@ -40,6 +41,11 @@ export interface ToolCtx {
   // A completion pinned to the dedicated coding model (d1 / OpenCode Zen),
   // regardless of which model the user is chatting on. Used by build_app.
   completeCoder: (messages: Record<string, unknown>[], tools?: ToolSchema[]) => Promise<ModelMessage>
+  // Files uploaded in the current turn, available for prepare_email to attach.
+  attachments?: { id: string; name: string }[]
+  // The authenticated user row (with the encrypted Gmail App Password), for the
+  // IMAP-backed tools (read/modify/draft). Absent when Gmail isn't connected.
+  user?: User
 }
 
 interface AgentTool {
@@ -169,7 +175,7 @@ For each file, write a line exactly like "=== FILE: index.html ===" then the fil
 No thinking out loud, no explanations, no markdown fences — just the === FILE: markers and file contents. Keep it focused and working.`
 
 function stripFence(body: string): string {
-  let b = body.replace(/^\s*```[a-zA-Z0-9]*[^\n]*\n/, "").replace(/\n```\s*$/, "")
+  const b = body.replace(/^\s*```[a-zA-Z0-9]*[^\n]*\n/, "").replace(/\n```\s*$/, "")
   return b.replace(/^\n+/, "").replace(/\s+$/, "") + "\n"
 }
 
@@ -327,6 +333,162 @@ async function buildApp(args: Record<string, unknown>, ctx?: ToolCtx): Promise<T
       `point them to the canvas. Do NOT paste the code into chat.`,
     detail: `${files.length} files`,
     ui: { t: "code", id, title, files, entry },
+  }
+}
+
+// ── prepare_email: stage email(s) for the user's explicit approval ───────────
+// This NEVER sends. It validates the drafts and emits a UI event that renders
+// an approval card in chat; the user reviews and clicks Send, which hits the
+// authenticated /api/email/send endpoint. Sending without a human click is
+// impossible by construction.
+const EMAIL_ADDR_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+
+interface EmailAttachment {
+  id: string
+  name: string
+}
+interface StagedEmail {
+  to: string
+  subject: string
+  body: string
+  attachments?: EmailAttachment[]
+}
+
+async function prepareEmail(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  const raw = Array.isArray(args.emails) ? (args.emails as Record<string, unknown>[]) : []
+  const avail = ctx?.attachments ?? [] // files uploaded this turn
+  const byName = new Map(avail.map((a) => [a.name.toLowerCase(), a]))
+
+  const emails: StagedEmail[] = []
+  const invalid: string[] = []
+  const single = raw.length === 1
+  for (const e of raw.slice(0, 200)) {
+    const to = String(e?.to ?? "").trim()
+    const subject = String(e?.subject ?? "").trim().slice(0, 300)
+    const body = String(e?.body ?? "").trim().slice(0, 50_000)
+    if (!EMAIL_ADDR_RE.test(to)) {
+      invalid.push(to || "(blank)")
+      continue
+    }
+    // Resolve requested attachment filenames → uploaded files. If none were
+    // named but there's a single email and files were uploaded this turn,
+    // attach them all (the "send this PDF to X" default).
+    let attachments: EmailAttachment[] | undefined
+    const named = Array.isArray(e?.attachments) ? (e.attachments as unknown[]).map((n) => String(n)) : null
+    if (named && named.length) {
+      const resolved = named.map((n) => byName.get(n.toLowerCase())).filter((a): a is EmailAttachment => !!a)
+      if (resolved.length) attachments = resolved
+    } else if (single && avail.length) {
+      attachments = avail
+    }
+    emails.push({ to, subject, body, attachments })
+  }
+
+  if (emails.length === 0) {
+    return {
+      result:
+        "No valid recipient email addresses were provided, so nothing was staged. " +
+        (invalid.length ? `Invalid: ${invalid.join(", ")}. ` : "") +
+        "Ask the user for a valid recipient address — never invent one.",
+      detail: "no valid recipients",
+    }
+  }
+
+  const batchId = randomUUID()
+  const noun = emails.length === 1 ? "email" : `${emails.length} emails`
+  const attachedCount = emails.reduce((n, e) => n + (e.attachments?.length ?? 0), 0)
+  return {
+    result:
+      `Staged ${noun} for the user's approval — an approval card is now showing in chat with the recipient(s), ` +
+      `subject, body${attachedCount ? " and attachment(s)" : ""}. The email is NOT sent yet: the user must review ` +
+      `and click Send (or Approve All). ` +
+      `${invalid.length ? `Note: ${invalid.length} invalid address(es) were skipped (${invalid.join(", ")}). ` : ""}` +
+      `${avail.length && attachedCount === 0 ? "Note: uploaded file(s) were NOT attached — if the user wanted them attached, list their filenames in each email's attachments. " : ""}` +
+      `Tell the user it's ready to review, in one short line. Do not repeat the full body in chat.`,
+    detail: attachedCount ? `${noun}, ${attachedCount} file(s)` : noun,
+    ui: { t: "email", batchId, emails },
+  }
+}
+
+// ── read_emails: fetch/search the user's Gmail inbox (IMAP, read-only) ───────
+async function readEmails(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user?.gmailAppPassword)
+    return { result: "Gmail isn't connected, so the inbox can't be read. Tell the user to connect Gmail first.", detail: "not connected" }
+  const query = args.query ? String(args.query).slice(0, 200) : undefined
+  const limit = Math.min(Math.max(Number(args.limit) || 15, 1), 40)
+  const full = args.full === true
+  try {
+    const items = await listMessages(ctx.user, { query, limit, full })
+    if (items.length === 0)
+      return { result: query ? `No emails matched "${query}".` : "The inbox is empty.", detail: "0 emails" }
+    ctx.emit({ t: "inbox", items: items.map((i) => ({ uid: i.uid, from: i.from, subject: i.subject, date: i.date, seen: i.seen, flagged: i.flagged, snippet: i.snippet })) })
+    const lines = items.map(
+      (i) =>
+        `[id ${i.uid}]${i.seen ? "" : " (unread)"} From: ${i.from} | Subject: ${i.subject} | ${i.date}\n  ${full ? (i.body || i.snippet) : i.snippet}`
+    )
+    return {
+      result:
+        `Fetched ${items.length} email(s)${query ? ` matching "${query}"` : ""}. Reference any of them by their id ` +
+        `for follow-up actions (reply via prepare_email, delete_emails, modify_emails):\n\n${lines.join("\n\n")}`,
+      detail: `${items.length} emails`,
+    }
+  } catch (e) {
+    return { result: `Couldn't read the inbox: ${friendlyImapError(e)}.`, detail: "error" }
+  }
+}
+
+// ── delete_emails: stage a move-to-Trash for the user's explicit approval ─────
+// Like prepare_email, this NEVER deletes directly — it emits a confirmation card
+// and the actual move-to-Trash happens via the authenticated /api/email/delete
+// endpoint only after the user clicks.
+async function deleteEmails(args: Record<string, unknown>): Promise<ToolResult> {
+  const raw = Array.isArray(args.emails) ? (args.emails as Record<string, unknown>[]) : []
+  const items = raw
+    .map((e) => ({ uid: Number(e?.id), subject: String(e?.subject ?? "(no subject)").slice(0, 200), from: String(e?.from ?? "").slice(0, 200) }))
+    .filter((e) => Number.isFinite(e.uid))
+    .slice(0, 100)
+  if (items.length === 0)
+    return { result: "No valid email ids were provided to delete. Read the inbox first to get ids.", detail: "no ids" }
+  const batchId = randomUUID()
+  return {
+    result:
+      `Staged ${items.length} email(s) for deletion — a confirmation card is now showing. Nothing is deleted ` +
+      `until the user clicks Move to Trash. Tell them it's ready to confirm, in one short line.`,
+    detail: `${items.length} to delete`,
+    ui: { t: "email_delete", batchId, items },
+  }
+}
+
+// ── modify_emails: change message state (flags / archive), reversible ────────
+async function modifyEmails(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user?.gmailAppPassword)
+    return { result: "Gmail isn't connected. Tell the user to connect Gmail first.", detail: "not connected" }
+  const ids = Array.isArray(args.ids) ? (args.ids as unknown[]).map((n) => Number(n)).filter(Number.isFinite) : []
+  const action = String(args.action ?? "") as ModifyAction
+  const valid: ModifyAction[] = ["mark_read", "mark_unread", "star", "unstar", "archive"]
+  if (!valid.includes(action)) return { result: `Unknown action "${action}". Use one of: ${valid.join(", ")}.`, detail: "bad action" }
+  if (ids.length === 0) return { result: "No valid email ids were provided.", detail: "no ids" }
+  try {
+    const n = await modifyMessages(ctx.user, ids, action)
+    return { result: `${action.replace("_", " ")} applied to ${n} email(s).`, detail: `${n} updated` }
+  } catch (e) {
+    return { result: `Couldn't update the email(s): ${friendlyImapError(e)}.`, detail: "error" }
+  }
+}
+
+// ── save_draft: create a draft in the user's Gmail Drafts folder ──────────────
+async function saveDraftTool(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user?.gmailAppPassword)
+    return { result: "Gmail isn't connected. Tell the user to connect Gmail first.", detail: "not connected" }
+  const to = String(args.to ?? "").trim()
+  const subject = String(args.subject ?? "").trim().slice(0, 300)
+  const body = String(args.body ?? "").slice(0, 50_000)
+  if (!to && !subject && !body) return { result: "The draft is empty.", detail: "empty" }
+  try {
+    await saveDraft(ctx.user, { to, subject, body })
+    return { result: `Draft saved to Gmail Drafts${to ? ` (to ${to})` : ""}. The user can find it in Gmail.`, detail: "draft saved" }
+  } catch (e) {
+    return { result: `Couldn't save the draft: ${friendlyImapError(e)}.`, detail: "error" }
   }
 }
 
@@ -571,6 +733,161 @@ export const TOOLS: Record<string, AgentTool> = {
     },
     label: (a) => `Building “${String(a.title ?? "app").slice(0, 60)}”`,
     run: buildApp,
+  },
+  prepare_email: {
+    schema: {
+      type: "function",
+      function: {
+        name: "prepare_email",
+        description:
+          "Prepare one or more emails for the user to review and send from their connected Gmail. Use this " +
+          "whenever the user asks to email, send, or mail something to someone (e.g. \"send this to john@x.com\", " +
+          "\"email all the invoices to their clients\", \"draft 5 emails\"). Write a clear, professional subject " +
+          "and body for each. This does NOT send — it opens an approval card where the user clicks Send. NEVER " +
+          "invent recipient addresses: if you don't have a real address, ask for it. For batch requests, add one " +
+          "entry per recipient with that recipient's own tailored subject/body. " +
+          "If the user uploaded files this turn (their names are noted in the message as \"[Attached PDF: name]\") " +
+          "and wants them sent, put the exact filename(s) in that email's `attachments` array. For a single email, " +
+          "any files uploaded this turn are attached automatically.",
+        parameters: {
+          type: "object",
+          properties: {
+            emails: {
+              type: "array",
+              description: "The email(s) to stage — one object per recipient.",
+              items: {
+                type: "object",
+                properties: {
+                  to: { type: "string", description: "The recipient's email address (must be real, never fabricated)." },
+                  subject: { type: "string", description: "A clear, professional subject line." },
+                  body: { type: "string", description: "The full email body as plain text." },
+                  attachments: {
+                    type: "array",
+                    description:
+                      "Filenames of files uploaded this turn to attach to THIS email (must exactly match an uploaded filename). Omit if none.",
+                    items: { type: "string" },
+                  },
+                },
+                required: ["to", "subject", "body"],
+              },
+            },
+          },
+          required: ["emails"],
+        },
+      },
+    },
+    label: (a) => {
+      const n = Array.isArray(a.emails) ? a.emails.length : 0
+      return n === 1 ? "Preparing an email" : `Preparing ${n} emails`
+    },
+    run: prepareEmail,
+  },
+  read_emails: {
+    schema: {
+      type: "function",
+      function: {
+        name: "read_emails",
+        description:
+          "Read or search the user's Gmail inbox. Use when they ask what's in their inbox, to find or summarize " +
+          "emails, or before replying/deleting (you need each email's id). Returns recent emails (or those matching " +
+          "`query`) with sender, subject, date and a snippet. Set `full` to include full bodies when the user wants " +
+          "you to actually read the contents. To reply, read first, then call prepare_email with a suitable body.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Optional search over sender / subject / body. Omit for the most recent emails." },
+            limit: { type: "number", description: "How many to fetch (1–40, default 15)." },
+            full: { type: "boolean", description: "Include full message bodies (use when the user wants the actual content read)." },
+          },
+        },
+      },
+    },
+    label: (a) => (a.query ? `Searching inbox for “${String(a.query).slice(0, 40)}”` : "Reading the inbox"),
+    run: readEmails,
+  },
+  delete_emails: {
+    schema: {
+      type: "function",
+      function: {
+        name: "delete_emails",
+        description:
+          "Move one or more emails to Gmail Trash (recoverable). This does NOT delete directly — it opens a " +
+          "confirmation card the user must click. Get each email's id from read_emails first. Pass the id plus the " +
+          "subject/from you saw, so the user can confirm exactly what will be trashed.",
+        parameters: {
+          type: "object",
+          properties: {
+            emails: {
+              type: "array",
+              description: "The emails to trash.",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "number", description: "The email id (uid) from read_emails." },
+                  subject: { type: "string", description: "The subject you saw (for the confirmation card)." },
+                  from: { type: "string", description: "The sender you saw (for the confirmation card)." },
+                },
+                required: ["id"],
+              },
+            },
+          },
+          required: ["emails"],
+        },
+      },
+    },
+    label: (a) => {
+      const n = Array.isArray(a.emails) ? a.emails.length : 0
+      return `Preparing to delete ${n} email${n === 1 ? "" : "s"}`
+    },
+    run: deleteEmails,
+  },
+  modify_emails: {
+    schema: {
+      type: "function",
+      function: {
+        name: "modify_emails",
+        description:
+          "Change the state of emails (reversible): mark read/unread, star/unstar, or archive (remove from inbox). " +
+          "Get ids from read_emails first.",
+        parameters: {
+          type: "object",
+          properties: {
+            ids: { type: "array", description: "Email ids (uids) from read_emails.", items: { type: "number" } },
+            action: {
+              type: "string",
+              enum: ["mark_read", "mark_unread", "star", "unstar", "archive"],
+              description: "What to do to those emails.",
+            },
+          },
+          required: ["ids", "action"],
+        },
+      },
+    },
+    label: (a) => `${String(a.action ?? "update").replace("_", " ")} email(s)`,
+    run: modifyEmails,
+  },
+  save_draft: {
+    schema: {
+      type: "function",
+      function: {
+        name: "save_draft",
+        description:
+          "Save an email draft into the user's Gmail Drafts folder (does not send). Use when they ask you to draft/" +
+          "compose an email and save it for later, or to edit an email by saving a revised draft. To actually send, " +
+          "use prepare_email instead.",
+        parameters: {
+          type: "object",
+          properties: {
+            to: { type: "string", description: "Recipient address (may be blank for an unaddressed draft)." },
+            subject: { type: "string", description: "Subject line." },
+            body: { type: "string", description: "The draft body as plain text." },
+          },
+          required: ["subject", "body"],
+        },
+      },
+    },
+    label: () => "Saving a Gmail draft",
+    run: saveDraftTool,
   },
   spawn_agents: {
     schema: {

@@ -1,14 +1,34 @@
 // Data-access layer. ALL persistence goes through these functions, so moving
 // from libSQL/SQLite to PostgreSQL later means reimplementing only this file.
 import { randomUUID } from "crypto"
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, lt } from "drizzle-orm"
 import { db, initDb } from "./index"
-import { users, sessions, conversations, messages, type User, type Conversation, type Message } from "./schema"
+import { users, sessions, conversations, messages, uploads, type User, type Conversation, type Message, type Upload } from "./schema"
 
 // ── Users ───────────────────────────────────────────────────────────────────
-export async function createUser(email: string, passwordHash: string, name?: string): Promise<User> {
+export async function createUser(
+  email: string,
+  passwordHash: string,
+  name?: string,
+  extra?: {
+    systemPrompt?: string | null
+    settings?: string | null
+    gmailAddress?: string | null
+    gmailAppPassword?: string | null
+  }
+): Promise<User> {
   await initDb()
-  const row: User = { id: randomUUID(), email, name: name ?? null, passwordHash, createdAt: Date.now() }
+  const row: User = {
+    id: randomUUID(),
+    email,
+    name: name ?? null,
+    passwordHash,
+    systemPrompt: extra?.systemPrompt ?? null,
+    settings: extra?.settings ?? null,
+    gmailAddress: extra?.gmailAddress ?? null,
+    gmailAppPassword: extra?.gmailAppPassword ?? null,
+    createdAt: Date.now(),
+  }
   await db.insert(users).values(row)
   return row
 }
@@ -21,6 +41,34 @@ export async function getUserByEmail(email: string): Promise<User | undefined> {
 export async function getUserById(id: string): Promise<User | undefined> {
   await initDb()
   return (await db.select().from(users).where(eq(users.id, id)))[0]
+}
+
+// Set (or with a null password, clear) the user's Gmail connection.
+export async function setUserGmail(
+  id: string,
+  gmailAddress: string | null,
+  gmailAppPassword: string | null
+): Promise<void> {
+  await initDb()
+  await db.update(users).set({ gmailAddress, gmailAppPassword }).where(eq(users.id, id))
+}
+
+// ── Uploads (files kept for emailing as attachments) ────────────────────────
+const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000 // pruned after a day
+
+export async function createUpload(userId: string, name: string, mime: string, dataB64: string): Promise<string> {
+  await initDb()
+  const id = randomUUID()
+  await db.insert(uploads).values({ id, userId, name: name.slice(0, 200), mime, data: dataB64, createdAt: Date.now() })
+  // Opportunistic cleanup so the table never grows unbounded.
+  void db.delete(uploads).where(lt(uploads.createdAt, Date.now() - UPLOAD_TTL_MS)).catch(() => {})
+  return id
+}
+
+// Fetch an upload the given user owns (ownership check prevents cross-user access).
+export async function getUpload(id: string, userId: string): Promise<Upload | undefined> {
+  await initDb()
+  return (await db.select().from(uploads).where(and(eq(uploads.id, id), eq(uploads.userId, userId))))[0]
 }
 
 // ── Sessions ────────────────────────────────────────────────────────────────

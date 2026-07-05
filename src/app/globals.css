@@ -469,6 +469,26 @@
   }
 }
 
+/* auth stepper affirmation ("Nice name.", "All done.") — a slow, unhurried
+   fade in, a long readable hold, then a gentle fade out. Timed to the ~2.4s
+   the step-advance timer waits before moving on. */
+@keyframes authAffirm {
+  0%   { opacity: 0; transform: translateY(8px) scale(0.985); }
+  22%  { opacity: 1; transform: translateY(0) scale(1); }
+  78%  { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-6px) scale(0.99); }
+}
+.auth-affirm {
+  opacity: 0;
+  animation: authAffirm 2.4s var(--ease-smooth) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-affirm {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .anim-rise,
   .anim-scale-in,

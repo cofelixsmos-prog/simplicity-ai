@@ -1,7 +1,8 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Moon } from "lucide-react"
+import { LS_AUTO_NIGHT, readLocalFlag } from "@/lib/settings"
 
 // Evening wind-down. After 6pm, the first time you open Simplicity that day, it
 // offers Night mode. The warmth itself lives in the background shader (an amber
@@ -20,34 +21,44 @@ export function NightMode() {
   const [on, setOn] = useState(false)
   const [ask, setAsk] = useState(false)
   const [leaving, setLeaving] = useState(false)
+  // Mirror of `on` so the (mount-only) toggle handler reads the latest value
+  // without needing an impure state updater to broadcast the change.
+  const onRef = useRef(on)
+  onRef.current = on
 
   useEffect(() => {
     let enabled = false
     try {
       enabled = localStorage.getItem(KEY_ON) === "1"
       const hour = new Date().getHours()
-      // Auto-reset between 6am and 6pm — night is over
+      // Auto-reset between 6am and 6pm — night is over. Return to "auto" (clear
+      // the key) rather than an explicit "off", so the evening drift still comes
+      // back on its own. "0" is reserved for a deliberate user "off".
       if (enabled && hour >= 6 && hour < 18) {
-        localStorage.setItem(KEY_ON, "0")
+        localStorage.removeItem(KEY_ON)
         enabled = false
       }
       setOn(enabled)
+      // The evening invitation only appears if the user left Auto Night mode on
+      // (a preference chosen at sign-up). Manual ⌘K toggling still works either way.
       const evening = hour >= 18
       const askedToday = localStorage.getItem(KEY_ASKED) === todayStr()
-      if (evening && !enabled && !askedToday) setAsk(true)
+      if (evening && !enabled && !askedToday && readLocalFlag(LS_AUTO_NIGHT)) setAsk(true)
     } catch {
       /* storage unavailable */
     }
 
-    const toggle = () =>
-      setOn((v) => {
-        const nv = !v
-        try {
-          localStorage.setItem(KEY_ON, nv ? "1" : "0")
-        } catch {}
-        broadcast(nv)
-        return nv
-      })
+    // Side effects (persist + broadcast) run in the event handler, NOT inside a
+    // state updater — updater functions run during render, and broadcasting
+    // there would synchronously setState in ShaderBackground mid-render.
+    const toggle = () => {
+      const nv = !onRef.current
+      setOn(nv)
+      try {
+        localStorage.setItem(KEY_ON, nv ? "1" : "0")
+      } catch {}
+      broadcast(nv)
+    }
     window.addEventListener("toggle-night", toggle)
     return () => window.removeEventListener("toggle-night", toggle)
   }, [])

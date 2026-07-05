@@ -23,6 +23,11 @@ import {
   Moon,
   Trash2,
   LogOut,
+  Paperclip,
+  FileText,
+  X,
+  Loader2,
+  Mail,
 } from "lucide-react"
 import { MessageContent, type Visual } from "@/components/ui/message-content"
 import { ToolActivity, type Step } from "@/components/ui/tool-activity"
@@ -31,6 +36,8 @@ import { AgentPanel } from "@/components/ui/agent-panel"
 import { VisualPanel } from "@/components/ui/visual-panel"
 import { DraftCanvas, type DraftData } from "@/components/ui/draft-canvas"
 import { CodeCanvas, type AppData } from "@/components/ui/code-canvas"
+import { EmailApprovalCard, type StagedEmail } from "@/components/ui/email-card"
+import { InboxCard, DeleteEmailCard, type InboxItem, type DeleteItem } from "@/components/ui/email-inbox-card"
 import { StatusBoard } from "@/components/ui/status-board"
 import { CommandPalette, type Command } from "@/components/ui/command-palette"
 import { type ConvoLite } from "@/components/ui/chat-sidebar"
@@ -43,12 +50,28 @@ import { Tooltip } from "@/components/ui/tooltip"
 import { toast } from "@/components/ui/toast"
 import { playSend, playDone, playType, playBackspace } from "@/lib/sound"
 import { MODELS, DEFAULT_MODEL_ID, getModel } from "@/lib/models"
+import { parseSettings, mirrorSettingsToLocal } from "@/lib/settings"
 
 interface Message {
   role: "user" | "assistant"
   content: string
   steps?: Step[]
   agents?: AgentCard[]
+  attachments?: { name: string }[]
+  // Email(s) the AI staged for approval, rendered as an inline approval card.
+  email?: StagedEmail[]
+  // Inbox listing (read_emails) rendered as a read-only card.
+  inbox?: InboxItem[]
+  // Emails staged for deletion, rendered as a Trash-confirmation card.
+  deleteEmails?: DeleteItem[]
+}
+
+interface PdfAttachment {
+  attachmentId: string
+  name: string
+  text: string
+  pages: number
+  truncated: boolean
 }
 
 type Reasoning = "off" | "low" | "medium" | "high"
@@ -157,9 +180,20 @@ export default function ChatPage() {
   const [planDecisions, setPlanDecisions] = useState<Record<number, "approved" | "denied">>({})
   // Auth + chat history
   const [user, setUser] = useState<{ email: string; name: string | null } | null | undefined>(undefined)
+  // The user's custom "rules" (system prompt) — forwarded with each chat request.
+  const [userRules, setUserRules] = useState("")
+  // Whether the user has connected Gmail — gates the email tool and the
+  // Connect/Disconnect commands.
+  const [gmailConnected, setGmailConnected] = useState(false)
   const [conversations, setConversations] = useState<ConvoLite[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [showWelcome, setShowWelcome] = useState(false)
+  const [welcomeKind, setWelcomeKind] = useState<"login" | "register">("login")
+  // PDF attachments queued for the next message — text is extracted server-side
+  // (the chat models are text-only) and folded into the request, not shown raw.
+  const [attachments, setAttachments] = useState<PdfAttachment[]>([])
+  const [uploadingPdf, setUploadingPdf] = useState(false)
+  const pdfInputRef = useRef<HTMLInputElement>(null)
 
   // Compute greeting on the client only (avoids SSR/hydration mismatch).
   useEffect(() => {
@@ -177,11 +211,19 @@ export default function ChatPage() {
           return
         }
         setUser({ email: d.user.email, name: d.user.name })
-        // Show the welcome-back moment only right after a fresh login/register —
+        setUserRules(typeof d.user.systemPrompt === "string" ? d.user.systemPrompt : "")
+        setGmailConnected(d.user.gmailConnected === true)
+        // Mirror the account's ambient preferences to localStorage so the
+        // client-only NightMode / shader components can read them synchronously.
+        mirrorSettingsToLocal(parseSettings(d.user.settings))
+        // Show the welcome moment only right after a fresh login/register —
         // not on every reload or internal navigation back to /chat.
         try {
           if (sessionStorage.getItem("sx-just-logged-in")) {
             sessionStorage.removeItem("sx-just-logged-in")
+            const kind = sessionStorage.getItem("sx-welcome-kind")
+            sessionStorage.removeItem("sx-welcome-kind")
+            setWelcomeKind(kind === "register" ? "register" : "login")
             setShowWelcome(true)
           }
         } catch {}
@@ -315,7 +357,42 @@ export default function ChatPage() {
     setPanelApp(null)
     setAgentPanelIdx(null)
     setConversationId(null)
+    setAttachments([])
     closeDowntime()
+  }
+
+  const MAX_ATTACHMENTS = 3
+
+  const handlePdfSelect = async (files: FileList | null) => {
+    if (!files || files.length === 0) return
+    const room = MAX_ATTACHMENTS - attachments.length
+    if (room <= 0) {
+      toast(`You can attach up to ${MAX_ATTACHMENTS} PDFs per message.`, "error")
+      return
+    }
+    const picked = Array.from(files).slice(0, room)
+    setUploadingPdf(true)
+    for (const file of picked) {
+      try {
+        const form = new FormData()
+        form.append("file", file)
+        const res = await fetch("/api/upload-pdf", { method: "POST", body: form })
+        const data = await res.json()
+        if (!res.ok) {
+          toast(data.error ?? `Couldn't read ${file.name}.`, "error")
+          continue
+        }
+        setAttachments((a) => [...a, data as PdfAttachment])
+        if (data.truncated) toast(`${file.name} is long — only the first part was used.`, "success")
+      } catch {
+        toast(`Couldn't upload ${file.name}.`, "error")
+      }
+    }
+    setUploadingPdf(false)
+  }
+
+  const removeAttachment = (name: string) => {
+    setAttachments((a) => a.filter((f) => f.name !== name))
   }
 
   const refreshConversations = async () => {
@@ -360,6 +437,53 @@ export default function ChatPage() {
     window.location.href = "/login"
   }
 
+  // ── Gmail connection (from the command palette) ─────────────────────────────
+  const connectGmail = async () => {
+    const raw = window.prompt(
+      "Paste your 16-character Gmail App Password.\n\nCreate one at myaccount.google.com/apppasswords (needs 2-Step Verification). Emails send from your account email."
+    )
+    if (raw == null) return
+    const appPassword = raw.replace(/\s+/g, "")
+    if (appPassword.length !== 16) {
+      toast("A Gmail App Password is 16 characters.")
+      return
+    }
+    try {
+      const res = await fetch("/api/gmail", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appPassword }),
+      })
+      if (!res.ok) {
+        toast((await res.json().catch(() => ({}))).error ?? "Couldn't connect Gmail.")
+        return
+      }
+      setGmailConnected(true)
+      toast("Gmail connected. Run “Test Gmail connection” to verify.")
+    } catch {
+      toast("Network error connecting Gmail.")
+    }
+  }
+
+  const testGmail = async () => {
+    toast("Testing Gmail connection…")
+    try {
+      const res = await fetch("/api/email/test", { method: "POST" })
+      const data = await res.json().catch(() => ({}))
+      toast(data.ok ? "Gmail connection works ✓" : data.error ?? "Gmail test failed.")
+    } catch {
+      toast("Network error testing Gmail.")
+    }
+  }
+
+  const disconnectGmail = async () => {
+    try {
+      await fetch("/api/gmail", { method: "DELETE" })
+    } catch {}
+    setGmailConnected(false)
+    toast("Gmail disconnected.")
+  }
+
   const send = async (text: string) => {
     const trimmed = text.trim()
     if (!trimmed || loading) return
@@ -369,12 +493,40 @@ export default function ChatPage() {
     playSend()
     const ctrl = new AbortController()
     abortRef.current = ctrl
-    const next: Message[] = [...messages, { role: "user", content: trimmed }]
+    const pendingAttachments = attachments
+    const next: Message[] = [
+      ...messages,
+      {
+        role: "user",
+        content: trimmed,
+        attachments: pendingAttachments.length
+          ? pendingAttachments.map((a) => ({ name: a.name }))
+          : undefined,
+      },
+    ]
     setMessages(next)
     setInput("")
+    setAttachments([])
     setLoading(true)
     setThinking(false)
     setMessages((m) => [...m, { role: "assistant", content: "" }])
+
+    // The model only ever sees plain text, so fold each PDF's extracted text
+    // into the outgoing request as clearly-delimited context — the visible
+    // bubble and persisted history stay just the user's typed message.
+    const apiMessages: Message[] = pendingAttachments.length
+      ? next.map((m, i) =>
+          i === next.length - 1
+            ? {
+                ...m,
+                content:
+                  pendingAttachments
+                    .map((a) => `[Attached PDF: ${a.name}${a.truncated ? " (truncated)" : ""}]\n${a.text}`)
+                    .join("\n\n") + `\n\n${trimmed}`,
+              }
+            : m
+        )
+      : next
 
     // Ensure a conversation exists, then persist the user message (best-effort).
     let convoId = conversationId
@@ -405,9 +557,15 @@ export default function ChatPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: next,
+          messages: apiMessages,
           model: modelId,
           reasoning: model.supportsReasoning ? reasoning : "off",
+          systemPrompt: userRules || undefined,
+          gmailConnected,
+          // Files uploaded this turn — available for the AI to attach to an email.
+          attachments: pendingAttachments.length
+            ? pendingAttachments.map((a) => ({ id: a.attachmentId, name: a.name }))
+            : undefined,
         }),
         signal: ctrl.signal,
       })
@@ -428,6 +586,9 @@ export default function ChatPage() {
       let acc = ""
       const steps: Step[] = []
       const agents: AgentCard[] = []
+      let email: StagedEmail[] | undefined
+      let inbox: InboxItem[] | undefined
+      let deleteEmails: DeleteItem[] | undefined
 
       // Replace the trailing assistant placeholder with the latest text/steps/agents.
       const flush = () => {
@@ -438,6 +599,9 @@ export default function ChatPage() {
             content: acc,
             steps: steps.length ? [...steps] : undefined,
             agents: agents.length ? agents.map((a) => ({ ...a, steps: [...a.steps] })) : undefined,
+            email,
+            inbox,
+            deleteEmails,
           }
           return copy
         })
@@ -469,6 +633,9 @@ export default function ChatPage() {
             agentId?: string
             files?: { name: string; content: string }[]
             entry?: string
+            emails?: StagedEmail[]
+            batchId?: string
+            items?: InboxItem[] | DeleteItem[]
           }
           try {
             ev = JSON.parse(t)
@@ -519,6 +686,25 @@ export default function ChatPage() {
               title: ev.title ?? "Untitled draft",
               content: ev.content ?? "",
             })
+          } else if (ev.t === "email") {
+            // The agent staged email(s) for approval — attach an inline card to
+            // this assistant message. Nothing sends until the user clicks Send.
+            if (Array.isArray(ev.emails) && ev.emails.length) {
+              email = ev.emails
+              flush()
+            }
+          } else if (ev.t === "inbox") {
+            // read_emails returned a listing — show it as a read-only card.
+            if (Array.isArray(ev.items)) {
+              inbox = ev.items as InboxItem[]
+              flush()
+            }
+          } else if (ev.t === "email_delete") {
+            // delete_emails staged a Trash move — show the confirmation card.
+            if (Array.isArray(ev.items) && ev.items.length) {
+              deleteEmails = ev.items as DeleteItem[]
+              flush()
+            }
           } else if (ev.t === "code") {
             // The coding agent built/rebuilt an app — open it in the code canvas.
             setPanelVisual(null)
@@ -691,6 +877,12 @@ export default function ChatPage() {
     { id: "go-home", group: "Go to", label: "Home", icon: Home, run: () => (window.location.href = "/") },
     { id: "go-dev", group: "Go to", label: "Developers", icon: Code2, run: () => (window.location.href = "/developers") },
     { id: "go-res", group: "Go to", label: "Resources", icon: BookOpen, run: () => (window.location.href = "/resources") },
+    ...(gmailConnected
+      ? [
+          { id: "gmail-test", group: "Account", label: "Test Gmail connection", icon: Mail, keywords: "email smtp verify", run: testGmail } as Command,
+          { id: "gmail-disconnect", group: "Account", label: "Disconnect Gmail", icon: Mail, keywords: "email smtp remove", run: disconnectGmail } as Command,
+        ]
+      : [{ id: "gmail-connect", group: "Account", label: "Connect Gmail", icon: Mail, keywords: "email smtp app password send", run: connectGmail } as Command]),
     ...(conversationId
       ? [{ id: "del", group: "Account", label: "Delete this chat", icon: Trash2, run: () => deleteConvo(conversationId) } as Command]
       : []),
@@ -717,7 +909,9 @@ export default function ChatPage() {
 
       {/* Welcome-back moment: glass card breathes in over the shader, holds,
           then dissolves to reveal the chat — same background throughout. */}
-      {showWelcome && <WelcomeOverlay name={firstName} onDone={() => setShowWelcome(false)} />}
+      {showWelcome && (
+        <WelcomeOverlay name={firstName} kind={welcomeKind} onDone={() => setShowWelcome(false)} />
+      )}
 
       {/* ⌘K command palette */}
       <CommandPalette commands={commands} />
@@ -743,6 +937,49 @@ export default function ChatPage() {
             Simplicity
           </a>
           <div className="pointer-events-auto flex items-center gap-1.5">
+            {/* Model picker (opens downward) */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setModelMenu((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1.5 text-xs font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <span className="font-mono">{model.label}</span>
+                <ChevronDown className="size-3.5 text-white/50" />
+              </button>
+              {modelMenu && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setModelMenu(false)} />
+                  <div className="liquid-glass liquid-glass-soft absolute right-0 top-full z-20 mt-2 w-64 overflow-hidden rounded-2xl p-1 shadow-2xl animate-in fade-in zoom-in-95 slide-in-from-top-2 duration-200 ease-out">
+                    {MODELS.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => {
+                          setModelId(m.id)
+                          setModelMenu(false)
+                        }}
+                        className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/10 ${
+                          m.id === modelId ? "bg-white/10" : ""
+                        }`}
+                      >
+                        <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-white/20 font-mono text-[11px] text-white">
+                          {m.label}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="flex items-center gap-1.5 text-sm font-medium text-white">
+                            {m.name}
+                            {m.supportsReasoning && <Brain className="size-3 text-white/50" />}
+                          </span>
+                          <span className="block text-xs text-white/50">{m.description}</span>
+                        </span>
+                        {m.id === modelId && <Check className="ml-auto mt-1 size-4 text-white" />}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
             <Tooltip label="Command palette" side="bottom">
               <button
                 onClick={() => window.dispatchEvent(new Event("open-cmdk"))}
@@ -775,7 +1012,20 @@ export default function ChatPage() {
                 {messages.map((m, i) => (
                   <div key={i} className={m.role === "user" ? "msg-in-user" : "msg-in-ai"}>
                     {m.role === "user" ? (
-                      <div className="flex justify-end">
+                      <div className="flex flex-col items-end gap-1.5">
+                        {m.attachments && m.attachments.length > 0 && (
+                          <div className="flex flex-wrap justify-end gap-1.5">
+                            {m.attachments.map((a) => (
+                              <span
+                                key={a.name}
+                                className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-xs text-white/60"
+                              >
+                                <FileText className="size-3.5 text-white/40" />
+                                <span className="max-w-[160px] truncate">{a.name}</span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
                         <div className="liquid-glass max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 text-[15px] leading-relaxed text-white">
                           {m.content}
                         </div>
@@ -839,11 +1089,17 @@ export default function ChatPage() {
                               <span className="animate-pulse text-sm text-white/55">Thinking…</span>
                             </div>
                           ) : (m.steps && m.steps.length > 0) ||
-                            (m.agents && m.agents.length > 0) ? null : (
+                            (m.agents && m.agents.length > 0) ||
+                            (m.email && m.email.length > 0) ||
+                            (m.inbox && m.inbox.length > 0) ||
+                            (m.deleteEmails && m.deleteEmails.length > 0) ? null : (
                             <div className="flex items-center pt-1">
                               <span className="size-2 animate-pulse rounded-full bg-white/55" />
                             </div>
                           )}
+                          {m.email && m.email.length > 0 && <EmailApprovalCard emails={m.email} />}
+                          {m.inbox && m.inbox.length > 0 && <InboxCard items={m.inbox} />}
+                          {m.deleteEmails && m.deleteEmails.length > 0 && <DeleteEmailCard items={m.deleteEmails} />}
                         </div>
                       </div>
                     )}
@@ -895,6 +1151,34 @@ export default function ChatPage() {
             className={empty ? "w-full max-w-2xl" : "mx-auto w-full max-w-3xl"}
           >
             <div className="glass-in liquid-glass flex w-full flex-col gap-2 rounded-[28px] px-4 pb-2.5 pt-3 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.6)] transition-all duration-300 ease-out focus-within:border-white/25 focus-within:shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_24px_64px_-16px_rgba(0,0,0,0.75)]">
+              {/* attached PDFs */}
+              {(attachments.length > 0 || uploadingPdf) && (
+                <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                  {attachments.map((a) => (
+                    <span
+                      key={a.name}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/[0.05] py-1 pl-2.5 pr-1.5 text-xs text-white/75 animate-in fade-in zoom-in-95 duration-200"
+                    >
+                      <FileText className="size-3.5 text-white/45" />
+                      <span className="max-w-[160px] truncate">{a.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeAttachment(a.name)}
+                        aria-label={`Remove ${a.name}`}
+                        className="rounded-full p-0.5 text-white/40 transition-colors hover:bg-white/10 hover:text-white"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                  {uploadingPdf && (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-xs text-white/50">
+                      <Loader2 className="size-3.5 animate-spin" />
+                      Reading…
+                    </span>
+                  )}
+                </div>
+              )}
               {/* input row */}
               <textarea
                 ref={textareaRef}
@@ -921,49 +1205,29 @@ export default function ChatPage() {
               {/* toolbar row: controls left, send right */}
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  {/* Model picker (opens upward) */}
-                  <div className="relative">
+                  {/* Attach PDF */}
+                  <input
+                    ref={pdfInputRef}
+                    type="file"
+                    accept="application/pdf,.pdf"
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      handlePdfSelect(e.target.files)
+                      e.target.value = "" // allow re-selecting the same file later
+                    }}
+                  />
+                  <Tooltip label="Attach a PDF" side="top">
                     <button
                       type="button"
-                      onClick={() => setModelMenu((v) => !v)}
-                      className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-3 py-1.5 text-xs font-medium text-white/80 transition-colors hover:bg-white/10 hover:text-white"
+                      onClick={() => pdfInputRef.current?.click()}
+                      disabled={uploadingPdf || attachments.length >= MAX_ATTACHMENTS}
+                      aria-label="Attach a PDF"
+                      className="inline-flex size-8 items-center justify-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-30"
                     >
-                      <span className="font-mono">{model.label}</span>
-                      <ChevronDown className="size-3.5 text-white/50" />
+                      <Paperclip className="size-4" />
                     </button>
-                    {modelMenu && (
-                      <>
-                        <div className="fixed inset-0 z-10" onClick={() => setModelMenu(false)} />
-                        <div className="liquid-glass liquid-glass-soft absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-2xl p-1 shadow-2xl animate-in fade-in zoom-in-95 slide-in-from-bottom-2 duration-200 ease-out">
-                          {MODELS.map((m) => (
-                            <button
-                              key={m.id}
-                              type="button"
-                              onClick={() => {
-                                setModelId(m.id)
-                                setModelMenu(false)
-                              }}
-                              className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/10 ${
-                                m.id === modelId ? "bg-white/10" : ""
-                              }`}
-                            >
-                              <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border border-white/20 font-mono text-[11px] text-white">
-                                {m.label}
-                              </span>
-                              <span className="min-w-0">
-                                <span className="flex items-center gap-1.5 text-sm font-medium text-white">
-                                  {m.name}
-                                  {m.supportsReasoning && <Brain className="size-3 text-white/50" />}
-                                </span>
-                                <span className="block text-xs text-white/50">{m.description}</span>
-                              </span>
-                              {m.id === modelId && <Check className="ml-auto mt-1 size-4 text-white" />}
-                            </button>
-                          ))}
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  </Tooltip>
 
                   {/* Reasoning selector */}
                   {model.supportsReasoning && (
