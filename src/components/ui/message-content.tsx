@@ -54,11 +54,11 @@ function VisualBlock({
       {!streaming && onExpand && (
         <button
           onClick={() => onExpand(visual)}
-          className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-black/50 px-2.5 py-1.5 text-xs text-white/80 opacity-0 backdrop-blur transition-opacity hover:bg-black/70 group-hover/visual:opacity-100"
+          className="absolute right-3 top-3 inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-black/50 px-2.5 py-1.5 text-xs text-white/80 opacity-70 backdrop-blur transition-opacity hover:bg-black/70 hover:opacity-100"
           title="Open in side panel"
         >
           <Maximize2 className="size-3.5" />
-          Expand
+          Open
         </button>
       )}
     </div>

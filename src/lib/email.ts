@@ -2,6 +2,7 @@
 // on the user. The sender address is the account email — there is no separate
 // Gmail field; connecting is just the App Password.
 import nodemailer, { type Transporter } from "nodemailer"
+import type SMTPTransport from "nodemailer/lib/smtp-transport"
 import { decryptSecret } from "@/lib/crypto"
 import type { User } from "@/lib/db/schema"
 
@@ -34,7 +35,10 @@ export function getGmailTransport(user: User): { transport: Transporter; from: s
     port: 465,
     secure: true,
     auth: { user: from, pass },
-  })
+    // Force IPv4. Some hosts (e.g. Render) have no IPv6 egress, but DNS resolves
+    // smtp.gmail.com to an IPv6 address first → connect ENETUNREACH on ::…:465.
+    family: 4,
+  } as SMTPTransport.Options)
   return { transport, from }
 }
 

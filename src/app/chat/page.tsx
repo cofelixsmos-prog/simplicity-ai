@@ -28,6 +28,7 @@ import {
   X,
   Loader2,
   Mail,
+  Mic,
 } from "lucide-react"
 import { MessageContent, type Visual } from "@/components/ui/message-content"
 import { ToolActivity, type Step } from "@/components/ui/tool-activity"
@@ -38,6 +39,7 @@ import { DraftCanvas, type DraftData } from "@/components/ui/draft-canvas"
 import { CodeCanvas, type AppData } from "@/components/ui/code-canvas"
 import { EmailApprovalCard, type StagedEmail } from "@/components/ui/email-card"
 import { InboxCard, DeleteEmailCard, type InboxItem, type DeleteItem } from "@/components/ui/email-inbox-card"
+import { VoiceMode } from "@/components/ui/voice-mode"
 import { StatusBoard } from "@/components/ui/status-board"
 import { CommandPalette, type Command } from "@/components/ui/command-palette"
 import { type ConvoLite } from "@/components/ui/chat-sidebar"
@@ -64,6 +66,10 @@ interface Message {
   inbox?: InboxItem[]
   // Emails staged for deletion, rendered as a Trash-confirmation card.
   deleteEmails?: DeleteItem[]
+  // Artifacts produced this message, kept so they can be reopened any time
+  // (not just when first created).
+  app?: AppData
+  draft?: DraftData
 }
 
 interface PdfAttachment {
@@ -139,6 +145,38 @@ function collapseMessage(): string {
   )
 }
 
+// A reopenable handle for an artifact (app / draft) produced in a message, so
+// it can be opened in the side panel any time — not just when first created.
+function ArtifactCard({
+  icon,
+  title,
+  subtitle,
+  active,
+  onOpen,
+}: {
+  icon: React.ReactNode
+  title: string
+  subtitle: string
+  active?: boolean
+  onOpen: () => void
+}) {
+  return (
+    <button
+      onClick={onOpen}
+      className={`mt-3 flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-colors ${
+        active ? "border-white/25 bg-white/[0.07]" : "border-white/10 bg-white/[0.03] hover:bg-white/[0.06]"
+      }`}
+    >
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white/10">{icon}</span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-white">{title}</span>
+        <span className="block truncate text-xs text-white/45">{subtitle}</span>
+      </span>
+      <span className="shrink-0 text-xs font-medium text-white/60">{active ? "Open" : "Open ↗"}</span>
+    </button>
+  )
+}
+
 function LogoMark({ className = "" }: { className?: string }) {
   return (
     <span className={`flex items-center justify-center rounded-lg bg-foreground text-background ${className}`}>
@@ -194,6 +232,8 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useState<PdfAttachment[]>([])
   const [uploadingPdf, setUploadingPdf] = useState(false)
   const pdfInputRef = useRef<HTMLInputElement>(null)
+  // Hands-free voice conversation overlay.
+  const [voiceOpen, setVoiceOpen] = useState(false)
 
   // Compute greeting on the client only (avoids SSR/hydration mismatch).
   useEffect(() => {
@@ -589,6 +629,8 @@ export default function ChatPage() {
       let email: StagedEmail[] | undefined
       let inbox: InboxItem[] | undefined
       let deleteEmails: DeleteItem[] | undefined
+      let app: AppData | undefined
+      let draft: DraftData | undefined
 
       // Replace the trailing assistant placeholder with the latest text/steps/agents.
       const flush = () => {
@@ -602,6 +644,8 @@ export default function ChatPage() {
             email,
             inbox,
             deleteEmails,
+            app,
+            draft,
           }
           return copy
         })
@@ -677,15 +721,15 @@ export default function ChatPage() {
               flush()
             }
           } else if (ev.t === "draft") {
-            // The agent opened/updated a draft — show it in the editable canvas.
+            // The agent opened/updated a draft — show it in the editable canvas
+            // and keep it on the message so it can be reopened later.
+            const d = { id: ev.id ?? "", title: ev.title ?? "Untitled draft", content: ev.content ?? "" }
+            draft = d
+            flush()
             setPanelVisual(null)
             setPanelApp(null)
             setAgentPanelIdx(null)
-            setPanelDraft({
-              id: ev.id ?? "",
-              title: ev.title ?? "Untitled draft",
-              content: ev.content ?? "",
-            })
+            setPanelDraft(d)
           } else if (ev.t === "email") {
             // The agent staged email(s) for approval — attach an inline card to
             // this assistant message. Nothing sends until the user clicks Send.
@@ -706,16 +750,20 @@ export default function ChatPage() {
               flush()
             }
           } else if (ev.t === "code") {
-            // The coding agent built/rebuilt an app — open it in the code canvas.
-            setPanelVisual(null)
-            setPanelDraft(null)
-            setAgentPanelIdx(null)
-            setPanelApp({
+            // The coding agent built/edited an app — open it in the code canvas
+            // and keep it on the message so it can be reopened later.
+            const a = {
               id: ev.id ?? "",
               title: ev.title ?? "Untitled app",
               files: Array.isArray(ev.files) ? ev.files : [],
               entry: ev.entry ?? "",
-            })
+            }
+            app = a
+            flush()
+            setPanelVisual(null)
+            setPanelDraft(null)
+            setAgentPanelIdx(null)
+            setPanelApp(a)
           } else if (ev.t === "text") {
             acc += ev.v ?? ""
             if (acc.trim().length > 0) setThinking(false)
@@ -912,6 +960,7 @@ export default function ChatPage() {
       {showWelcome && (
         <WelcomeOverlay name={firstName} kind={welcomeKind} onDone={() => setShowWelcome(false)} />
       )}
+      <VoiceMode open={voiceOpen} onClose={() => setVoiceOpen(false)} model={modelId} />
 
       {/* ⌘K command palette */}
       <CommandPalette commands={commands} />
@@ -1092,7 +1141,9 @@ export default function ChatPage() {
                             (m.agents && m.agents.length > 0) ||
                             (m.email && m.email.length > 0) ||
                             (m.inbox && m.inbox.length > 0) ||
-                            (m.deleteEmails && m.deleteEmails.length > 0) ? null : (
+                            (m.deleteEmails && m.deleteEmails.length > 0) ||
+                            m.app ||
+                            m.draft ? null : (
                             <div className="flex items-center pt-1">
                               <span className="size-2 animate-pulse rounded-full bg-white/55" />
                             </div>
@@ -1100,6 +1151,34 @@ export default function ChatPage() {
                           {m.email && m.email.length > 0 && <EmailApprovalCard emails={m.email} />}
                           {m.inbox && m.inbox.length > 0 && <InboxCard items={m.inbox} />}
                           {m.deleteEmails && m.deleteEmails.length > 0 && <DeleteEmailCard items={m.deleteEmails} />}
+                          {m.app && (
+                            <ArtifactCard
+                              icon={<Code2 className="size-4 text-white/80" />}
+                              title={m.app.title}
+                              subtitle={`${m.app.files.length} file${m.app.files.length === 1 ? "" : "s"} · live app`}
+                              active={panelApp?.id === m.app.id}
+                              onOpen={() => {
+                                setPanelVisual(null)
+                                setPanelDraft(null)
+                                setAgentPanelIdx(null)
+                                setPanelApp(m.app!)
+                              }}
+                            />
+                          )}
+                          {m.draft && (
+                            <ArtifactCard
+                              icon={<FileText className="size-4 text-white/80" />}
+                              title={m.draft.title}
+                              subtitle="document"
+                              active={panelDraft?.id === m.draft.id}
+                              onOpen={() => {
+                                setPanelVisual(null)
+                                setPanelApp(null)
+                                setAgentPanelIdx(null)
+                                setPanelDraft(m.draft!)
+                              }}
+                            />
+                          )}
                         </div>
                       </div>
                     )}
@@ -1226,6 +1305,18 @@ export default function ChatPage() {
                       className="inline-flex size-8 items-center justify-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-30"
                     >
                       <Paperclip className="size-4" />
+                    </button>
+                  </Tooltip>
+
+                  {/* Voice mode */}
+                  <Tooltip label="Talk to Simplicity" side="top">
+                    <button
+                      type="button"
+                      onClick={() => setVoiceOpen(true)}
+                      aria-label="Start voice mode"
+                      className="inline-flex size-8 items-center justify-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white"
+                    >
+                      <Mic className="size-4" />
                     </button>
                   </Tooltip>
 

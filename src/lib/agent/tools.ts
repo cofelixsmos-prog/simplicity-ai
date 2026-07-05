@@ -329,10 +329,87 @@ async function buildApp(args: Record<string, unknown>, ctx?: ToolCtx): Promise<T
   return {
     result:
       `Built "${title}" — ${files.length} file(s): ${fileList}. The project is now open in the live code ` +
-      `canvas where the user can preview and edit it. Give a brief one-line summary of what you built and ` +
-      `point them to the canvas. Do NOT paste the code into chat.`,
+      `canvas. Its app id is "${id}". To EDIT this app later (tweak, add features, fix something), call ` +
+      `update_app with this id — do NOT call build_app again, which creates a separate new project and loses this ` +
+      `design. Give a brief one-line summary of what you built and point them to the canvas. Do NOT paste code into chat.`,
     detail: `${files.length} files`,
     ui: { t: "code", id, title, files, entry },
+  }
+}
+
+// ── update_app: edit an existing project in place (keeps its id & design) ─────
+// Loads the current files, hands them to the coder with the requested change,
+// and writes the result back to the SAME app record so the canvas refreshes
+// rather than spawning a brand-new, differently-styled project.
+async function updateApp(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  const id = String(args.id ?? "").trim()
+  const changes = String(args.changes ?? "").trim()
+  if (!ctx) return { result: "Coding is unavailable in this context.", detail: "error" }
+  if (!id) return { result: "An existing app id is required to edit. It was returned by build_app.", detail: "no id" }
+  if (!changes) return { result: "Describe what to change.", detail: "empty" }
+
+  await initDb()
+  const existing = (await db.select().from(apps).where(eq(apps.id, id)))[0]
+  if (!existing)
+    return {
+      result: `No app found with id "${id}" (it may be from an earlier session). Build a new one with build_app instead.`,
+      detail: "not found",
+    }
+
+  let currentFiles: ProjectFile[] = []
+  try {
+    currentFiles = JSON.parse(existing.files) as ProjectFile[]
+  } catch {
+    /* corrupt — treat as empty, coder will rebuild from the change desc */
+  }
+
+  const sid = randomUUID()
+  const edit = (status: string, detail?: string) =>
+    ctx.emit({ t: "step", id: `${sid}-edit`, tool: "design", label: `Editing “${existing.title}”`, status, detail })
+  edit("running")
+
+  const filesText = currentFiles.map((f) => `=== FILE: ${f.name} ===\n${f.content}`).join("\n")
+  const spec =
+    `Here is the CURRENT project. Apply the requested change and return the COMPLETE updated project — ALL files, ` +
+    `including unchanged ones — in the same "=== FILE: name ===" format. Preserve the existing structure, styling ` +
+    `and design; change only what the request asks for.\n\n` +
+    `CURRENT PROJECT:\n${filesText}\n\nREQUESTED CHANGE:\n${changes}`
+
+  let files: ProjectFile[] = []
+  for (let attempt = 0; attempt < 2 && files.length === 0; attempt++) {
+    const msg = await ctx.completeCoder([
+      { role: "system", content: attempt === 0 ? CODER_SYSTEM : CODER_RETRY_SYSTEM },
+      { role: "user", content: spec },
+    ])
+    files = parseProjectFiles(String(msg.content ?? ""))
+  }
+
+  if (files.length === 0) {
+    edit("error")
+    return {
+      result:
+        "The edit didn't go through (the coding engine may be overloaded or timed out). Tell the user briefly and " +
+        "ask if they'd like to try again — do NOT silently rebuild from scratch.",
+      detail: "failed",
+    }
+  }
+
+  edit("done", `${files.length} files`)
+  files.forEach((f, i) => {
+    const lines = f.content.replace(/\n$/, "").split("\n").length
+    ctx.emit({ t: "step", id: `${sid}-f${i}`, tool: "write_file", label: `Updated ${f.name}`, status: "done", detail: `${lines} ${lines === 1 ? "line" : "lines"}` })
+  })
+
+  const entry = pickEntry(files)
+  await db.update(apps).set({ files: JSON.stringify(files), entry, updatedAt: Date.now() }).where(eq(apps.id, id))
+  ctx.emit({ t: "step", id: `${sid}-run`, tool: "preview", label: "Refreshed preview", status: "done", detail: "ready" })
+
+  return {
+    result:
+      `Updated "${existing.title}" (id "${id}") in place — the same project was edited and the canvas refreshed. ` +
+      `Give a one-line summary of what changed. For further edits, call update_app again with this same id.`,
+    detail: `${files.length} files`,
+    ui: { t: "code", id, title: existing.title, files, entry },
   }
 }
 
@@ -714,7 +791,8 @@ export const TOOLS: Record<string, AgentTool> = {
           "interactive tool or component. Call this WHENEVER the user asks you to code, build, make or design a " +
           "website / app / page / UI. A specialized coding engine writes the multi-file project (HTML/CSS/JS or " +
           "React) and opens it in a live, editable preview canvas for the user. Do NOT write the code yourself — " +
-          "delegate it here with a detailed spec. You can call build_app again to make a different app.",
+          "delegate it here with a detailed spec. Use build_app ONLY for a brand-new project. To change an app you " +
+          "already built, use update_app (not build_app) so the existing design is kept.",
         parameters: {
           type: "object",
           properties: {
@@ -733,6 +811,33 @@ export const TOOLS: Record<string, AgentTool> = {
     },
     label: (a) => `Building “${String(a.title ?? "app").slice(0, 60)}”`,
     run: buildApp,
+  },
+  update_app: {
+    schema: {
+      type: "function",
+      function: {
+        name: "update_app",
+        description:
+          "Edit an app you ALREADY built, in place — keeping its existing files, structure and design. Call this " +
+          "whenever the user asks to change, tweak, fix, add to, or restyle the current app/canvas (e.g. \"make the " +
+          "button blue\", \"add a dark mode\", \"fix the layout\"). Pass the app's id (returned by build_app / shown " +
+          "for the current app) and a clear description of the change. NEVER use build_app to modify an existing " +
+          "app — that creates a new, differently-styled project and loses the current one.",
+        parameters: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "The id of the app to edit (from build_app's result / the open app)." },
+            changes: {
+              type: "string",
+              description: "A clear description of exactly what to change, add, remove, or fix. The rest is preserved.",
+            },
+          },
+          required: ["id", "changes"],
+        },
+      },
+    },
+    label: () => "Editing the app",
+    run: updateApp,
   },
   prepare_email: {
     schema: {

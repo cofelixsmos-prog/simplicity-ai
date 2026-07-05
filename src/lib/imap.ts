@@ -1,11 +1,21 @@
 // Server-only Gmail IMAP access (reading, deleting, flagging, drafts), built on
 // the same App Password used for sending. Every call opens a fresh connection
 // and closes it — simple and stateless, fine for the interactive volumes here.
+import dns from "dns"
 import { ImapFlow, type MailboxObject } from "imapflow"
 import { simpleParser } from "mailparser"
 import MailComposer from "nodemailer/lib/mail-composer"
 import { decryptSecret } from "@/lib/crypto"
 import type { User } from "@/lib/db/schema"
+
+// Prefer IPv4 when resolving hostnames. imapflow has no `family` option, and on
+// hosts without IPv6 egress (e.g. Render) an AAAA result causes the IMAP socket
+// to fail with connect ENETUNREACH. This makes dns.lookup return IPv4 first.
+try {
+  dns.setDefaultResultOrder("ipv4first")
+} catch {
+  /* older Node without this API */
+}
 
 export interface InboxItem {
   uid: number
