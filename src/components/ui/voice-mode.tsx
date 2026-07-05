@@ -35,11 +35,39 @@ function getSRCtor(): SRCtor | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
 }
 
-// Prefer an Indian-English voice for the reply (Heera/Ravi/Rishi on various OSes).
+// Prefer an Indian-English voice for the reply, favouring locally-installed
+// voices (remote voices often don't play on desktop Chrome). Falls back to any
+// English voice, then whatever exists.
 function pickVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | undefined {
-  const byLang = voices.filter((v) => /en[-_]IN/i.test(v.lang))
-  const named = voices.find((v) => /india|heera|ravi|rishi|aditi|priya|neel/i.test(v.name))
-  return byLang[0] ?? named ?? voices.find((v) => /^en/i.test(v.lang))
+  if (!voices.length) return undefined
+  const score = (v: SpeechSynthesisVoice) => {
+    let s = 0
+    if (/en[-_]IN/i.test(v.lang)) s += 100
+    if (/india|heera|ravi|rishi|aditi|priya|neel|hindi/i.test(v.name)) s += 60
+    if (/^en/i.test(v.lang)) s += 20
+    if (v.localService) s += 10 // local voices are reliable offline
+    if (v.default) s += 1
+    return s
+  }
+  return [...voices].sort((a, b) => score(b) - score(a))[0]
+}
+
+// getVoices() is async on desktop — resolve once the list is actually populated.
+function loadVoices(): Promise<SpeechSynthesisVoice[]> {
+  if (!("speechSynthesis" in window)) return Promise.resolve([])
+  const synth = window.speechSynthesis
+  const now = synth.getVoices()
+  if (now.length) return Promise.resolve(now)
+  return new Promise((resolve) => {
+    let settled = false
+    const done = () => {
+      if (settled) return
+      settled = true
+      resolve(synth.getVoices())
+    }
+    synth.addEventListener("voiceschanged", done, { once: true })
+    setTimeout(done, 1200) // fallback if the event never fires
+  })
 }
 
 type Status = "requesting" | "idle" | "listening" | "thinking" | "speaking" | "error"
@@ -65,7 +93,9 @@ export function VoiceMode({
   const recRef = useRef<SpeechRecognitionLike | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
-  const analyserRef = useRef<AnalyserNode | null>(null)
+  const inAnalyserRef = useRef<AnalyserNode | null>(null) // mic input (listening)
+  const outAnalyserRef = useRef<AnalyserNode | null>(null) // TTS output (speaking)
+  const audioElRef = useRef<HTMLAudioElement | null>(null) // currently-playing backend audio
   const rafRef = useRef<number | null>(null)
   const convoRef = useRef<{ role: "user" | "assistant"; content: string }[]>([])
   const statusRef = useRef<Status>("idle")
@@ -82,23 +112,97 @@ export function VoiceMode({
   }
 
   // ── Speak a reply, then resume listening ───────────────────────────────────
-  const speak = useCallback((text: string, onDone: () => void) => {
-    if (!("speechSynthesis" in window) || !text.trim()) {
+  // Fallback: the browser's own speech engine (device-dependent voice). Only
+  // used if the backend TTS is unavailable.
+  const browserSpeak = useCallback((text: string, onDone: () => void) => {
+    if (!("speechSynthesis" in window)) {
       onDone()
       return
     }
     const synth = window.speechSynthesis
-    synth.cancel()
-    const u = new SpeechSynthesisUtterance(text)
-    const v = pickVoice(synth.getVoices())
-    if (v) u.voice = v
-    u.lang = v?.lang || "en-IN"
-    u.rate = 1.02
-    u.pitch = 1.05
-    u.onend = onDone
-    u.onerror = onDone
-    synth.speak(u)
+    loadVoices().then((voices) => {
+      synth.cancel()
+      synth.resume()
+      const u = new SpeechSynthesisUtterance(text)
+      const v = pickVoice(voices)
+      if (v) {
+        u.voice = v
+        u.lang = v.lang
+      }
+      u.rate = 1.0
+      u.pitch = 1.05
+      let finished = false
+      let keepAlive: ReturnType<typeof setInterval> | null = null
+      const finish = () => {
+        if (finished) return
+        finished = true
+        if (keepAlive) clearInterval(keepAlive)
+        onDone()
+      }
+      u.onend = finish
+      u.onerror = finish
+      keepAlive = setInterval(() => {
+        if (!synth.speaking) return
+        synth.pause()
+        synth.resume()
+      }, 9000)
+      setTimeout(() => {
+        if (!finished && !synth.speaking) finish()
+      }, Math.min(30000, 3000 + text.length * 90))
+      synth.speak(u)
+    })
   }, [])
+
+  // ── Speak via the backend (consistent voice on every device) ───────────────
+  // The audio is routed through an AnalyserNode so the orb reacts to the real
+  // output. Falls back to the browser voice if the server has no TTS provider.
+  const speak = useCallback(
+    (text: string, onDone: () => void) => {
+      if (!text.trim()) {
+        onDone()
+        return
+      }
+      let done = false
+      const finish = () => {
+        if (done) return
+        done = true
+        outAnalyserRef.current = null
+        onDone()
+      }
+      ;(async () => {
+        try {
+          const res = await fetch("/api/tts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text }),
+          })
+          if (!res.ok) throw new Error("tts unavailable")
+          const buf = await res.arrayBuffer()
+          if (buf.byteLength < 128) throw new Error("empty audio")
+          const url = URL.createObjectURL(new Blob([buf], { type: res.headers.get("Content-Type") || "audio/mpeg" }))
+          // Play the element directly — the most reliable path to the speakers.
+          // (No Web Audio routing here; that can silently swallow output if the
+          // AudioContext is suspended. The orb uses a synthetic pulse instead.)
+          const audio = new Audio(url)
+          audio.volume = 1
+          audioElRef.current = audio
+          audio.onended = () => {
+            URL.revokeObjectURL(url)
+            finish()
+          }
+          audio.onerror = () => {
+            URL.revokeObjectURL(url)
+            browserSpeak(text, finish) // fall back to the browser voice
+          }
+          await audio.play()
+        } catch {
+          // No backend TTS (or network error) → browser voice.
+          browserSpeak(text, finish)
+        }
+      })()
+    },
+    [browserSpeak]
+  )
 
   // ── One conversational turn: transcript → model → speak ────────────────────
   const handleTurn = useCallback(
@@ -222,11 +326,46 @@ export function VoiceMode({
     handleTurnRef.current = handleTurn
   }, [startListening, handleTurn])
 
-  // ── Request mic permission + wire the amplitude meter ──────────────────────
-  // The meter is ONLY for the reactive orb. It surfaces the mic prompt, but it's
-  // best-effort: if getUserMedia is unavailable (e.g. an embedded/insecure
-  // preview) we still let speech recognition try on its own. Returns whether it
-  // was granted, blocked, or simply unavailable.
+  // ── The orb animation loop — always runs while open ─────────────────────────
+  // Reads the mic analyser while listening and the TTS-output analyser while
+  // speaking (both best-effort); otherwise a gentle synthetic pulse.
+  const startLoop = useCallback(() => {
+    const buf = new Uint8Array(256)
+    const rms = (a: AnalyserNode) => {
+      a.getByteTimeDomainData(buf)
+      let sum = 0
+      for (let i = 0; i < buf.length; i++) {
+        const v = (buf[i] - 128) / 128
+        sum += v * v
+      }
+      return Math.sqrt(sum / buf.length)
+    }
+    let phase = 0
+    const tick = () => {
+      const st = statusRef.current
+      if (st === "listening" && !mutedRef.current && inAnalyserRef.current) {
+        setLevel((p) => p + (Math.min(1, rms(inAnalyserRef.current!) * 3.2) - p) * 0.35)
+      } else if (st === "speaking" && outAnalyserRef.current) {
+        setLevel((p) => p + (Math.min(1, rms(outAnalyserRef.current!) * 3.4) - p) * 0.4)
+      } else if (st === "speaking") {
+        phase += 0.28
+        const target = 0.45 + Math.abs(Math.sin(phase)) * 0.4 * (0.7 + Math.random() * 0.3)
+        setLevel((p) => p + (target - p) * 0.3)
+      } else if (st === "thinking" || st === "requesting") {
+        phase += 0.06
+        setLevel((p) => p + (0.28 + Math.sin(phase) * 0.08 - p) * 0.1)
+      } else {
+        setLevel((p) => p + (0 - p) * 0.1)
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    tick()
+  }, [])
+
+  // ── Request mic permission + wire the input analyser ───────────────────────
+  // Surfaces the mic prompt and feeds the orb while listening. Best-effort: if
+  // getUserMedia is unavailable (embedded/insecure preview) speech recognition
+  // still tries on its own. Returns granted / blocked / unavailable.
   const startMeter = useCallback(async (): Promise<"ok" | "denied" | "unavailable"> => {
     if (!navigator.mediaDevices?.getUserMedia) return "unavailable"
     setStat("requesting")
@@ -234,40 +373,13 @@ export function VoiceMode({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       streamRef.current = stream
       const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-      const ctx = new Ctx()
+      const ctx = audioCtxRef.current ?? new Ctx()
       audioCtxRef.current = ctx
       const src = ctx.createMediaStreamSource(stream)
       const analyser = ctx.createAnalyser()
       analyser.fftSize = 512
       src.connect(analyser)
-      analyserRef.current = analyser
-      const data = new Uint8Array(analyser.frequencyBinCount)
-      let speakPhase = 0
-      const tick = () => {
-        const st = statusRef.current
-        if (st === "listening" && !mutedRef.current) {
-          analyser.getByteTimeDomainData(data)
-          let sum = 0
-          for (let i = 0; i < data.length; i++) {
-            const v = (data[i] - 128) / 128
-            sum += v * v
-          }
-          const rms = Math.sqrt(sum / data.length) // 0..~0.5
-          setLevel((prev) => prev + (Math.min(1, rms * 3.2) - prev) * 0.35)
-        } else if (st === "speaking") {
-          // No easy way to read TTS output — synthesize a lively pulse.
-          speakPhase += 0.28
-          const target = 0.45 + Math.abs(Math.sin(speakPhase)) * 0.4 * (0.7 + Math.random() * 0.3)
-          setLevel((prev) => prev + (target - prev) * 0.3)
-        } else if (st === "thinking") {
-          speakPhase += 0.06
-          setLevel((prev) => prev + (0.28 + Math.sin(speakPhase) * 0.08 - prev) * 0.1)
-        } else {
-          setLevel((prev) => prev + (0 - prev) * 0.1)
-        }
-        rafRef.current = requestAnimationFrame(tick)
-      }
-      tick()
+      inAnalyserRef.current = analyser
       return "ok"
     } catch (e) {
       return (e as { name?: string })?.name === "NotAllowedError" ? "denied" : "unavailable"
@@ -284,8 +396,12 @@ export function VoiceMode({
     setHeard("")
     setReply("")
     setErrorMsg("")
-    // Warm up TTS voices (getVoices can be empty until this fires).
-    if ("speechSynthesis" in window) window.speechSynthesis.getVoices()
+    // Warm up TTS: kick async voice loading and clear any leftover paused state.
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.resume()
+      loadVoices()
+    }
+    startLoop() // orb animates regardless of mic availability
     ;(async () => {
       // Ask for the mic (drives the reactive orb + the permission prompt).
       const meter = await startMeter()
@@ -313,10 +429,15 @@ export function VoiceMode({
         recRef.current?.abort()
       } catch {}
       if ("speechSynthesis" in window) window.speechSynthesis.cancel()
+      if (audioElRef.current) {
+        audioElRef.current.pause()
+        audioElRef.current = null
+      }
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
       streamRef.current?.getTracks().forEach((t) => t.stop())
       audioCtxRef.current?.close().catch(() => {})
-      analyserRef.current = null
+      inAnalyserRef.current = null
+      outAnalyserRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -330,6 +451,8 @@ export function VoiceMode({
         recRef.current?.abort()
       } catch {}
       if ("speechSynthesis" in window) window.speechSynthesis.cancel()
+      audioElRef.current?.pause()
+      outAnalyserRef.current = null
       setStat("idle")
     } else {
       startListening()
