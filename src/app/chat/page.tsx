@@ -1249,7 +1249,7 @@ export default function ChatPage() {
               {modelMenu && (
                 <>
                   <div className="fixed inset-0 z-10" onClick={() => setModelMenu(false)} />
-                  <div className="liquid-glass liquid-glass-soft absolute right-0 top-full z-20 mt-2 w-64 overflow-hidden rounded-2xl p-1 shadow-2xl animate-in fade-in zoom-in-95 slide-in-from-top-2 duration-200 ease-out">
+                  <div className="liquid-glass liquid-glass-soft absolute top-full right-0 z-20 mt-2 w-64 overflow-hidden rounded-2xl p-1 shadow-2xl animate-in fade-in zoom-in-95 slide-in-from-top-2 duration-200 ease-out sm:w-72 max-h-[70vh] max-w-[calc(100vw-2rem)]">
                     {MODELS.map((m) => (
                       <button
                         key={m.id}

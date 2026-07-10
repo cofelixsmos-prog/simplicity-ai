@@ -106,12 +106,12 @@ export function CommandPalette({ commands }: { commands: Command[] }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center px-4 pt-[14vh] animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-hidden px-4 py-8 animate-in fade-in duration-150">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setOpen(false)} />
       <div
         role="dialog"
         aria-modal="true"
-        className="liquid-glass liquid-glass-soft relative z-10 w-full max-w-xl overflow-hidden rounded-2xl shadow-2xl animate-in fade-in zoom-in-95 slide-in-from-top-2 duration-200 ease-out"
+        className="liquid-glass liquid-glass-soft relative z-10 w-full max-w-xl max-h-[90vh] flex flex-col overflow-hidden rounded-2xl shadow-2xl animate-in fade-in zoom-in-95 duration-200 ease-out"
       >
         <div className="flex items-center gap-2.5 border-b border-white/10 px-4">
           <Search className="size-4 shrink-0 text-white/40" />
@@ -128,7 +128,7 @@ export function CommandPalette({ commands }: { commands: Command[] }) {
           </kbd>
         </div>
 
-        <div ref={listRef} className="max-h-[min(60vh,380px)] overflow-y-auto p-1.5">
+        <div ref={listRef} className="flex-1 overflow-y-auto p-1.5">
           {filtered.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-white/40">No matching commands</p>
           ) : (
