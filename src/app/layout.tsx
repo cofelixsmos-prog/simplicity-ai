@@ -27,14 +27,14 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Simplicity R1",
     description:
-      "Frontier reasoning refined down to what actually matters. Intelligence without complexity.",
+      "Fast, focused frontier reasoning. Made in India, made for India.",
     siteName: "Simplicity",
     type: "website",
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "Simplicity R1",
-    description: "Frontier reasoning refined down to what actually matters.",
+    description: "Fast, focused frontier reasoning. Made in India, made for India.",
   },
 };
 
