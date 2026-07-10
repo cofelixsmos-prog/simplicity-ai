@@ -2,7 +2,7 @@
 
 import { useRef, useState, type InputHTMLAttributes } from "react"
 import Link from "next/link"
-import { Loader2, ArrowRight, ArrowLeft, Moon, Sunrise } from "lucide-react"
+import { Loader2, ArrowRight, ArrowLeft, Moon, Sunrise, Chrome } from "lucide-react"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
 import { DEFAULT_SETTINGS } from "@/lib/settings"
@@ -150,6 +150,17 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
           </span>
           Simplicity
         </Link>
+
+        {/* Google auth button on register first step */}
+        {isRegister && idx === 0 && !flash && (
+          <a
+            href="/api/auth/google/start"
+            className="mb-5 flex w-full items-center justify-center gap-2 rounded-full border border-white/20 bg-white/5 py-3 text-sm font-medium text-white transition-colors hover:bg-white/10 active:scale-[0.99]"
+          >
+            <Chrome className="size-4" />
+            Sign up with Google
+          </a>
+        )}
 
         {/* the spoken affirmation replaces the box briefly between steps */}
         {flash ? (
