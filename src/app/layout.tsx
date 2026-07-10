@@ -24,6 +24,7 @@ export const metadata: Metadata = {
   description:
     "Simplicity R1 — frontier reasoning refined down to what actually matters. Focus mode, real deliverables, memory, and an agent swarm in one calm assistant.",
   applicationName: "Simplicity",
+  metadataBase: new URL("https://simplicity-india.com"),
   openGraph: {
     title: "Simplicity R1",
     description:
