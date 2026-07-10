@@ -2,6 +2,7 @@ import { getModel, DEFAULT_MODEL_ID, type ReasoningEffort } from "@/lib/models"
 import { TOOLS, TOOL_SCHEMAS, type ToolCtx, type ToolSchema, type ModelMessage } from "@/lib/agent/tools"
 import { corsHeaders, jsonResponse, preflight, clientIp, rateLimit } from "@/lib/api/http"
 import { getCurrentUserRow } from "@/lib/auth"
+import { listMemories } from "@/lib/db/repo"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -39,10 +40,10 @@ const PROVIDERS: Record<Provider, { url: string; envKey: string }> = {
 
 // Secret mapping of public model id → upstream provider + real model id.
 // Lives server-side only so the real model names never reach the browser bundle.
+// Single public model. r1 maps to the OpenCode Zen model (no per-minute token
+// cap like Groq's free tier) and also serves as the dedicated coder.
 const MODEL_BINDINGS: Record<string, { provider: Provider; providerModel: string }> = {
-  a1: { provider: "groq", providerModel: "llama-3.3-70b-versatile" },
-  r1: { provider: "groq", providerModel: "openai/gpt-oss-120b" },
-  d1: { provider: "opencode", providerModel: "deepseek-v4-flash-free" },
+  r1: { provider: "opencode", providerModel: "deepseek-v4-flash-free" },
 }
 
 function getBinding(id: string | undefined) {
@@ -50,7 +51,7 @@ function getBinding(id: string | undefined) {
 }
 
 const SYSTEM_PROMPT = `You are Simplicity, a capable AI agent. Intelligence without complexity — be clear, concise, and direct.
-
+Never say your gmail isnt connected always try to do the work but if it fails only then test gmail connection and connect if needed
 # AGENT WORKFLOW (read first)
 Decide if a request is SMALL or BIG.
 - SMALL = a single, well-specified deliverable (one diagram, one chart, a short code snippet, a direct question). Just DO it immediately. Do NOT ask questions, do NOT show a plan.
@@ -95,6 +96,10 @@ You have REAL tools. Call them instead of guessing or saying you can't access li
 - update_draft — revise a draft you already created, by its id.
 - build_app — the tool that actually writes code. It hands a "title" + a detailed "spec" to a dedicated coding engine that produces the full multi-file project (HTML/CSS/JS or React) and opens it in a live, editable preview canvas. NEVER write code by hand in chat — always go through build_app. Use build_app ONLY for a brand-NEW app. (In the coding workflow below you normally call this from inside a coder sub-agent, not directly.)
 - update_app — EDIT an app you already built, in place, keeping its design. When the user asks to change/tweak/fix/add to/restyle the current app (e.g. "make it dark", "add a reset button", "fix the header"), call update_app with the app's id (from build_app's result — it's in the conversation) and a description of the change. NEVER call build_app to modify an existing app; that makes a new, different-looking project and loses their work. Call update_app DIRECTLY (no sub-agent team needed for edits).
+- manage_gmail — connect / test / disconnect the user's Gmail from chat. Use 'test' when they ask whether email is set up or working, 'connect' when they want to connect Gmail (or a send failed because none is connected — it opens a secure prompt, never ask for the App Password yourself), 'disconnect' to remove it.
+- control_ui — change the app for the user right from chat: night mode on/off, focus mode on/off (level light/deep/study), ambient study sound, and the persistent Auto Night / Auto Morning preferences. Use it whenever they ask to change the look, dim things, focus, or stop/start the ambience — never tell them to go find a setting themselves.
+- list_artifacts — list apps/documents the user already made (with ids). Use it whenever they refer to something you built earlier so you can reopen/edit it (update_app / update_draft) instead of rebuilding.
+- remember — save a durable fact about the user to long-term memory (a lasting preference, a goal, an ongoing project, their name/role) so you recall it in future chats. Call it the moment such a fact appears; skip transient details, things already known, or anything sensitive they didn't volunteer.
 - prepare_email — when the user asks to email / send / mail something to someone, call this with one entry per recipient (a real "to" address, a professional "subject", and a plain-text "body"). It opens an approval card in chat; it does NOT send — the user reviews and clicks Send. For a batch ("email each client their invoice"), add one entry per recipient. NEVER invent an email address — if you don't have a real one, ask. If the user says "draft but don't send", still call prepare_email (the card is the draft; they simply won't click Send). Email availability is stated below; if Gmail isn't connected, tell the user to connect it (Settings → Connect Gmail) instead of calling the tool.
 - spawn_agents — delegate to a team of focused sub-agents that run in parallel. YOU decide how many (1–3), name each, set its kind (research / writer / coder / general), and give each a clear self-contained task. Research agents search the web, writer agents produce documents, coder agents call build_app. When they finish you'll get their results to synthesize. CRITICAL: never call spawn_agents with an empty list — if you call it, it must contain at least one real agent with a concrete task.
 
@@ -109,6 +114,7 @@ You may call tools multiple times and combine their results. After using tools, 
 
 # VISUALS & DELIVERABLES
 You can produce these. Choose the right one for the request.
+FORMATTING RULE: every fenced block (\`\`\`pdf, \`\`\`ppt, \`\`\`chart, \`\`\`mermaid, \`\`\`svg, \`\`\`excel, \`\`\`threejs) MUST start on its OWN line with a blank line before it — never glue the opening \`\`\` onto the end of a sentence (write "…here's the report:" then a blank line, then the block). Otherwise it renders as raw text instead of the real preview.
 
 ## 1. Flowcharts & diagrams → Mermaid
 For flowcharts, processes, sequences, org/tree structures, mind maps, ER diagrams.
@@ -274,7 +280,8 @@ DESIGN A REAL DECK — not a wall of bullet text:
 Rules: valid JSON. Every slide needs a "layout". title/section/closing use title (+ subtitle or eyebrow); agenda uses items[] (a string array); content uses bullets (+ optional chart); columns uses columns[] of {heading, bullets}; metrics uses metrics[] of {value, label}; quote uses quote (+ attribution). Aim for the number of slides the user asked for.
 
 ## 6. Documents → PDF JSON
-When the user wants a PDF / report / document, output a fenced block tagged \`pdf\` with JSON. It renders a polished, professional document with a Download .pdf button.
+When the user wants a PDF / report / document to READ or preview in chat, output a fenced block tagged \`pdf\` with JSON — a polished preview with a Download button.
+IMPORTANT — if the PDF must be EMAILED, downloaded as a real file, or saved to Drive, do NOT use the preview block; call the create_pdf TOOL instead (same block format). The preview block is client-only and has no file to attach — only create_pdf produces a real file. Flow to email a PDF: call create_pdf, then call prepare_email listing the returned filename in that email's attachments. Never claim a PDF is attached unless you called create_pdf and referenced its filename.
 - Add a "subtitle" and an "accent" hex color (no "#") to brand it.
 - Block types: "heading" (optional "level": 1 or 2), "paragraph", "list" (items[], optional "ordered": true for numbered), "table" (columns[] + rows[][]), "callout" (a highlighted key note), "divider".
 - Structure it with headings, put any data in a "table", and pull out key takeaways as "callout" — don't just stack paragraphs.
@@ -358,6 +365,7 @@ export async function POST(request: Request) {
   let reasoning: ReasoningEffort | "off" = "off"
   let userRules = ""
   let voice = false
+  let focusLevel: string | null = null
   let turnAttachments: { id: string; name: string }[] = []
   try {
     const body = await request.json()
@@ -365,6 +373,8 @@ export async function POST(request: Request) {
     modelId = body.model
     if (body.reasoning) reasoning = body.reasoning
     voice = body.voice === true
+    // focus is either a level string ("light"|"deep"|"study") or true (=deep).
+    focusLevel = typeof body.focus === "string" ? body.focus : body.focus === true ? "deep" : null
     // The custom "rules" the user set at sign-up (client forwards it from the
     // authenticated profile). Bounded so it can't blow the context window.
     if (typeof body.systemPrompt === "string") userRules = body.systemPrompt.slice(0, 2000).trim()
@@ -443,11 +453,41 @@ export async function POST(request: Request) {
       "- save_draft — save a draft into Gmail Drafts (does not send).\n" +
       "To REPLY or FORWARD: call read_emails first, then prepare_email with an appropriate body. Only use real ids " +
       "returned by read_emails — never guess an id. Everything is on the user's own account."
-    : "\n\n# EMAIL & INBOX\nThe user has NOT connected Gmail. Do NOT call any email/inbox tools. If they ask to send, read, or manage email, tell them to connect Gmail first (⌘K → Connect Gmail, using a Google App Password)."
+    : "\n\n# EMAIL & INBOX\nThe user has NOT connected Gmail. Do NOT call any email/inbox tools. If they ask to send, read, or manage email, connect Gmail first — call manage_gmail with action 'connect' (secure Google sign-in)."
+
+  // Google Drive rides on the OAuth connection (needs a refresh token, not an
+  // App Password), so it's gated separately from Gmail.
+  const driveStatus = userRow?.gmailRefreshToken
+    ? "\n\n# GOOGLE DRIVE\nThe user connected Google Drive. You can:\n" +
+      "- search_drive — find/list their files (get a file id here before reading).\n" +
+      "- read_drive_file — read a Doc/Sheet/Slides/text file's contents by id.\n" +
+      "- save_to_drive — save a draft, report, or notes to their Drive as a new file.\n" +
+      "Only use real file ids returned by search_drive — never guess one."
+    : "\n\n# GOOGLE DRIVE\nDrive is NOT connected. Don't call Drive tools. If they want Drive, tell them to connect Google (manage_gmail, action 'connect')."
 
   // Voice mode uses its own lean spoken persona and no tools. Text mode uses the
   // full prompt plus email status and the user's custom rules.
-  const base = SYSTEM_PROMPT + emailStatus
+  // Focus mode adjusts the assistant's behavior by level.
+  const FOCUS_PERSONA: Record<string, string> = {
+    light:
+      "\n\n# FOCUS MODE — LIGHT (the user is focusing)\nKeep your normal helpfulness and warmth, but cut distractions: stay on the topic they asked about, skip unrelated tangents and unprompted suggestions, and don't pad the answer. Be efficient.",
+    deep:
+      "\n\n# FOCUS MODE — DEEP (the user is focusing hard — obey this)\nBe concise and strictly on-task. Answer directly with the fewest words that fully do the job — short sentences or tight numbered steps, not essays. NO jokes, NO tangents, NO fun facts, NO unrelated suggestions, NO filler or pleasantries. If they set a focus-session goal, steer them back if they drift. Lead with the answer.",
+    study:
+      "\n\n# FOCUS MODE — STUDY (act as their study coach)\nBe concise, structured, and quietly encouraging. Break explanations into clear steps; check understanding; keep them moving toward their goal. Prefer guiding them to the answer over dumping it. No tangents or jokes, but a brief word of encouragement is welcome.",
+  }
+  const focusRules = focusLevel ? FOCUS_PERSONA[focusLevel] ?? FOCUS_PERSONA.deep : ""
+
+  // Long-term memory: durable facts the assistant saved about this user, folded
+  // in so it stays personalized across conversations.
+  const memoryFacts = userRow ? await listMemories(userRow.id, 40).catch(() => []) : []
+  const memoryRules = memoryFacts.length
+    ? `\n\n# WHAT YOU KNOW ABOUT THIS USER (long-term memory — use it naturally, never recite it)\n${memoryFacts
+        .map((m) => `- ${m.content}`)
+        .join("\n")}`
+    : ""
+
+  const base = SYSTEM_PROMPT + emailStatus + driveStatus + focusRules + memoryRules
   const textSystem = userRules
     ? `${base}\n\n# USER RULES (set by this user — follow them unless they conflict with the rules above)\n${userRules}`
     : base
@@ -512,10 +552,9 @@ export async function POST(request: Request) {
 
   // Orchestration completer runs on the user's selected model.
   const complete = makeComplete(binding, { timeoutMs: COMPLETE_TIMEOUT_MS })
-  // Coding is always delegated to d1 / OpenCode Zen (the dedicated coder),
-  // whichever model the user is chatting on. Falls back to the main completer
-  // if the coder provider has no key configured on this server.
-  const coderBinding = MODEL_BINDINGS.d1
+  // Coding is delegated to the OpenCode Zen coder. Falls back to the main
+  // completer if the coder provider has no key configured on this server.
+  const coderBinding = MODEL_BINDINGS.r1
   const coderHasKey = !!process.env[PROVIDERS[coderBinding.provider].envKey]
   const completeCoder = coderHasKey
     ? makeComplete(coderBinding, { timeoutMs: CODE_TIMEOUT_MS, temperature: 0.4, maxTokens: 8192 })
@@ -570,7 +609,8 @@ export async function POST(request: Request) {
           }
           if (!upstream.ok || !upstream.body) {
             clearTimeout(to)
-            console.error(`[chat] upstream ${upstream.status} from ${binding.provider} (${binding.providerModel})`)
+            const errBody = await upstream.text().catch(() => "")
+            console.error(`[chat] upstream ${upstream.status} from ${binding.provider} (${binding.providerModel}): ${errBody.slice(0, 500)}`)
             emit({ t: "error" })
             return
           }

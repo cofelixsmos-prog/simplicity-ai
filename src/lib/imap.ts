@@ -1,11 +1,13 @@
-// Server-only Gmail IMAP access (reading, deleting, flagging, drafts), built on
-// the same App Password used for sending. Every call opens a fresh connection
-// and closes it — simple and stateless, fine for the interactive volumes here.
+// Server-only Gmail IMAP access (reading, deleting, flagging, drafts). Uses the
+// same auth as sending: a Google OAuth access token (XOAUTH2) when connected via
+// OAuth, or a legacy App Password. Every call opens a fresh connection and closes
+// it — simple and stateless, fine for the interactive volumes here.
 import dns from "dns"
 import { ImapFlow, type MailboxObject } from "imapflow"
 import { simpleParser } from "mailparser"
 import MailComposer from "nodemailer/lib/mail-composer"
 import { decryptSecret } from "@/lib/crypto"
+import { googleConfig, getAccessToken } from "@/lib/google-oauth"
 import type { User } from "@/lib/db/schema"
 
 // Prefer IPv4 when resolving hostnames. imapflow has no `family` option, and on
@@ -28,19 +30,30 @@ export interface InboxItem {
   body?: string // present when a full read was requested
 }
 
-function makeClient(user: User): ImapFlow | null {
-  const pass = decryptSecret(user.gmailAppPassword)
-  if (!pass) return null
+async function makeClient(user: User): Promise<ImapFlow | null> {
   const auth = (user.gmailAddress || user.email).trim()
-  return new ImapFlow({
+  const common = {
     host: "imap.gmail.com",
     port: 993,
     secure: true,
-    auth: { user: auth, pass },
     logger: false,
     // Fail fast rather than hang the chat turn if Gmail is unreachable.
     socketTimeout: 20_000,
-  })
+  } as const
+
+  // Preferred: OAuth2 access token (minted from the stored refresh token).
+  const refresh = decryptSecret(user.gmailRefreshToken)
+  const cfg = googleConfig()
+  if (refresh && cfg) {
+    const accessToken = await getAccessToken(cfg, refresh)
+    if (!accessToken) return null
+    return new ImapFlow({ ...common, auth: { user: auth, accessToken } })
+  }
+
+  // Legacy: App Password.
+  const pass = decryptSecret(user.gmailAppPassword)
+  if (!pass) return null
+  return new ImapFlow({ ...common, auth: { user: auth, pass } })
 }
 
 // Resolve a special-use mailbox (\Trash, \Drafts, \All) to its real path, since
@@ -61,7 +74,7 @@ export function friendlyImapError(e: unknown): string {
   const err = e as { authenticationFailed?: boolean; responseText?: string; code?: string; message?: string }
   const blob = `${err?.code ?? ""} ${err?.responseText ?? ""} ${err?.message ?? String(e)}`
   if (err?.authenticationFailed || /invalid credentials|authentication failed|AUTHENTICATIONFAILED|Application-specific|Command failed/i.test(blob))
-    return "Gmail rejected the login. Check the App Password and that 2-Step Verification is on for this account (and that IMAP is enabled in Gmail settings)."
+    return "Gmail rejected the login. Try disconnecting and reconnecting Gmail, and make sure IMAP is enabled in Gmail settings."
   if (/ETIMEDOUT|ECONNECTION|ENOTFOUND|ECONNREFUSED|timeout/i.test(blob))
     return "Couldn't reach Gmail over IMAP. Check the connection and that IMAP is enabled in Gmail settings."
   return (err?.message ?? String(e)).slice(0, 200)
@@ -69,7 +82,7 @@ export function friendlyImapError(e: unknown): string {
 
 // Run a function with a connected client, always cleaning up.
 async function withClient<T>(user: User, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
-  const client = makeClient(user)
+  const client = await makeClient(user)
   if (!client) throw new Error("Gmail is not connected.")
   await client.connect()
   try {

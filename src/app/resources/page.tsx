@@ -46,8 +46,8 @@ const guides = [
   },
   {
     icon: BookOpen,
-    title: "A1 vs R1",
-    desc: "Choosing between fast everyday intelligence and frontier reasoning.",
+    title: "Meet R1",
+    desc: "One capable model that focuses, researches, builds, and orchestrates agents.",
     tag: "Concept",
     href: "/#models",
   },
@@ -56,7 +56,7 @@ const guides = [
 const faqs = [
   {
     q: "Which model should I use?",
-    a: "Start with A1 for fast, everyday tasks. Switch to R1 when a request needs multi-step reasoning, careful planning, or the best possible diagram quality.",
+    a: "There's just one — Simplicity R1. It's fast, capable, and always on, so there's no dropdown of tradeoffs to think about.",
   },
   {
     q: "What can the AI draw?",
@@ -83,7 +83,7 @@ export default function ResourcesPage() {
             Learn Simplicity.
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-muted-foreground">
-            Guides and references to get the most out of A1 and R1 — from your
+            Guides and references to get the most out of Simplicity R1 — from your
             first message to flowcharts, illustrations, and 3D models.
           </p>
         </div>

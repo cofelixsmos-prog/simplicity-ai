@@ -1,9 +1,9 @@
 // Data-access layer. ALL persistence goes through these functions, so moving
 // from libSQL/SQLite to PostgreSQL later means reimplementing only this file.
 import { randomUUID } from "crypto"
-import { and, desc, eq, lt } from "drizzle-orm"
+import { and, desc, eq, lt, isNotNull } from "drizzle-orm"
 import { db, initDb } from "./index"
-import { users, sessions, conversations, messages, uploads, type User, type Conversation, type Message, type Upload } from "./schema"
+import { users, sessions, conversations, messages, uploads, memories, type User, type Conversation, type Message, type Upload, type Memory } from "./schema"
 
 // ── Users ───────────────────────────────────────────────────────────────────
 export async function createUser(
@@ -27,6 +27,7 @@ export async function createUser(
     settings: extra?.settings ?? null,
     gmailAddress: extra?.gmailAddress ?? null,
     gmailAppPassword: extra?.gmailAppPassword ?? null,
+    gmailRefreshToken: null,
     createdAt: Date.now(),
   }
   await db.insert(users).values(row)
@@ -44,13 +45,47 @@ export async function getUserById(id: string): Promise<User | undefined> {
 }
 
 // Set (or with a null password, clear) the user's Gmail connection.
+export async function setUserSettings(userId: string, settings: string): Promise<void> {
+  await initDb()
+  await db.update(users).set({ settings }).where(eq(users.id, userId))
+}
+
+export async function setUserSystemPrompt(userId: string, systemPrompt: string | null): Promise<void> {
+  await initDb()
+  await db.update(users).set({ systemPrompt }).where(eq(users.id, userId))
+}
+
+export async function setUserName(userId: string, name: string): Promise<void> {
+  await initDb()
+  await db.update(users).set({ name }).where(eq(users.id, userId))
+}
+
+// Legacy App-Password path (and full disconnect via null, null). Always clears
+// any OAuth refresh token — the two auth methods are mutually exclusive.
 export async function setUserGmail(
   id: string,
   gmailAddress: string | null,
   gmailAppPassword: string | null
 ): Promise<void> {
   await initDb()
-  await db.update(users).set({ gmailAddress, gmailAppPassword }).where(eq(users.id, id))
+  await db
+    .update(users)
+    .set({ gmailAddress, gmailAppPassword, gmailRefreshToken: null })
+    .where(eq(users.id, id))
+}
+
+// OAuth path: store the encrypted refresh token + connected address, clearing
+// any legacy App Password.
+export async function setUserGmailOAuth(
+  id: string,
+  gmailAddress: string | null,
+  gmailRefreshToken: string
+): Promise<void> {
+  await initDb()
+  await db
+    .update(users)
+    .set({ gmailAddress, gmailRefreshToken, gmailAppPassword: null })
+    .where(eq(users.id, id))
 }
 
 // ── Uploads (files kept for emailing as attachments) ────────────────────────
@@ -94,18 +129,36 @@ export async function deleteSession(token: string): Promise<void> {
   await db.delete(sessions).where(eq(sessions.id, token))
 }
 
+// Sweep out expired sessions (called opportunistically on login).
+export async function pruneExpiredSessions(): Promise<void> {
+  await initDb()
+  await db.delete(sessions).where(lt(sessions.expiresAt, Date.now()))
+}
+
 // ── Conversations ───────────────────────────────────────────────────────────
 export async function createConversation(userId: string, title: string): Promise<Conversation> {
   await initDb()
   const now = Date.now()
-  const row: Conversation = { id: randomUUID(), userId, title: title.slice(0, 200) || "New chat", createdAt: now, updatedAt: now }
+  const row: Conversation = { id: randomUUID(), userId, title: title.slice(0, 200) || "New chat", pinned: 0, createdAt: now, updatedAt: now }
   await db.insert(conversations).values(row)
   return row
 }
 
 export async function listConversations(userId: string): Promise<Conversation[]> {
   await initDb()
-  return db.select().from(conversations).where(eq(conversations.userId, userId)).orderBy(desc(conversations.updatedAt))
+  return db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.userId, userId))
+    .orderBy(desc(conversations.pinned), desc(conversations.updatedAt))
+}
+
+export async function setConversationPinned(id: string, userId: string, pinned: boolean): Promise<void> {
+  await initDb()
+  await db
+    .update(conversations)
+    .set({ pinned: pinned ? 1 : 0 })
+    .where(and(eq(conversations.id, id), eq(conversations.userId, userId)))
 }
 
 export async function getConversation(id: string, userId: string): Promise<Conversation | undefined> {
@@ -130,9 +183,14 @@ export async function deleteConversation(id: string, userId: string): Promise<vo
 }
 
 // ── Messages ────────────────────────────────────────────────────────────────
-export async function addMessage(conversationId: string, role: "user" | "assistant", content: string): Promise<Message> {
+export async function addMessage(
+  conversationId: string,
+  role: "user" | "assistant",
+  content: string,
+  artifacts?: string | null
+): Promise<Message> {
   await initDb()
-  const row: Message = { id: randomUUID(), conversationId, role, content, createdAt: Date.now() }
+  const row: Message = { id: randomUUID(), conversationId, role, content, artifacts: artifacts ?? null, createdAt: Date.now() }
   await db.insert(messages).values(row)
   await touchConversation(conversationId)
   return row
@@ -141,4 +199,144 @@ export async function addMessage(conversationId: string, role: "user" | "assista
 export async function listMessages(conversationId: string): Promise<Message[]> {
   await initDb()
   return db.select().from(messages).where(eq(messages.conversationId, conversationId)).orderBy(messages.createdAt)
+}
+
+export async function updateMessageArtifacts(
+  conversationId: string,
+  messageIndex: number,
+  artifacts: string
+): Promise<boolean> {
+  await initDb()
+  const rows = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(eq(messages.conversationId, conversationId))
+    .orderBy(messages.createdAt)
+  const target = rows[messageIndex]
+  if (!target) return false
+  await db.update(messages).set({ artifacts }).where(eq(messages.id, target.id))
+  return true
+}
+
+// Every reopenable artifact (apps, drafts) the user has ever made, newest first,
+// aggregated across all their conversations for the artifacts gallery.
+export interface ArtifactEntry {
+  kind: "app" | "draft" | "email" | "file"
+  id: string
+  title: string
+  conversationId: string
+  createdAt: number
+  data: unknown
+}
+
+export async function listUserArtifacts(userId: string, limit = 200): Promise<ArtifactEntry[]> {
+  await initDb()
+  const rows = await db
+    .select({ artifacts: messages.artifacts, conversationId: messages.conversationId, createdAt: messages.createdAt })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .where(and(eq(conversations.userId, userId), isNotNull(messages.artifacts)))
+    .orderBy(desc(messages.createdAt))
+
+  const out: ArtifactEntry[] = []
+  const seen = new Set<string>()
+  for (const r of rows) {
+    if (!r.artifacts) continue
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(r.artifacts)
+    } catch {
+      continue
+    }
+    for (const kind of ["app", "draft"] as const) {
+      const a = parsed[kind] as { id?: string; title?: string } | undefined
+      if (!a || !a.id || seen.has(a.id)) continue
+      seen.add(a.id)
+      out.push({
+        kind,
+        id: a.id,
+        title: (a.title || (kind === "app" ? "Untitled app" : "Untitled draft")).slice(0, 200),
+        conversationId: r.conversationId,
+        createdAt: r.createdAt,
+        data: a,
+      })
+      if (out.length >= limit) return out
+    }
+    // Emails staged for sending
+    if (Array.isArray(parsed.email) && parsed.email.length) {
+      const emails = parsed.email as { to?: string; subject?: string }[]
+      const eid = `email-${r.createdAt}`
+      if (!seen.has(eid)) {
+        seen.add(eid)
+        const first = emails[0]
+        out.push({
+          kind: "email",
+          id: eid,
+          title: first?.subject || `Email to ${first?.to || "someone"}`,
+          conversationId: r.conversationId,
+          createdAt: r.createdAt,
+          data: parsed.email,
+        })
+        if (out.length >= limit) return out
+      }
+    }
+    // Generated files (PDFs etc.)
+    if (parsed.file && typeof parsed.file === "object") {
+      const f = parsed.file as { id?: string; name?: string }
+      if (f.id && !seen.has(f.id)) {
+        seen.add(f.id)
+        out.push({
+          kind: "file",
+          id: f.id,
+          title: f.name || "Document",
+          conversationId: r.conversationId,
+          createdAt: r.createdAt,
+          data: parsed.file,
+        })
+        if (out.length >= limit) return out
+      }
+    }
+  }
+  return out
+}
+
+// ── Memory (persistent facts the assistant learns about the user) ─────────────
+const MEMORY_CAP = 80 // keep the newest N; prune older so it never grows unbounded
+
+export async function addMemory(userId: string, content: string): Promise<Memory | null> {
+  await initDb()
+  const trimmed = content.trim().slice(0, 400)
+  if (!trimmed) return null
+  // Skip near-duplicates (same normalized text already stored).
+  const norm = trimmed.toLowerCase()
+  const existing = await db.select().from(memories).where(eq(memories.userId, userId))
+  if (existing.some((m) => m.content.trim().toLowerCase() === norm)) return null
+
+  const row: Memory = { id: randomUUID(), userId, content: trimmed, createdAt: Date.now() }
+  await db.insert(memories).values(row)
+
+  // Prune anything beyond the cap (oldest first).
+  if (existing.length + 1 > MEMORY_CAP) {
+    const old = [...existing, row]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(MEMORY_CAP)
+      .map((m) => m.id)
+    for (const id of old) await db.delete(memories).where(eq(memories.id, id))
+  }
+  return row
+}
+
+export async function listMemories(userId: string, limit = MEMORY_CAP): Promise<Memory[]> {
+  await initDb()
+  return db.select().from(memories).where(eq(memories.userId, userId)).orderBy(desc(memories.createdAt)).limit(limit)
+}
+
+export async function deleteMemory(id: string, userId: string): Promise<void> {
+  await initDb()
+  await db.delete(memories).where(and(eq(memories.id, id), eq(memories.userId, userId)))
+}
+
+export async function clearMemories(userId: string): Promise<void> {
+  await initDb()
+  await db.delete(memories).where(eq(memories.userId, userId))
 }

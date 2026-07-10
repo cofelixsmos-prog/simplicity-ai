@@ -60,7 +60,21 @@ export function NightMode() {
       broadcast(nv)
     }
     window.addEventListener("toggle-night", toggle)
-    return () => window.removeEventListener("toggle-night", toggle)
+    // Explicit on/off (the assistant's control_ui tool), as opposed to the toggle.
+    const setExplicit = (e: Event) => {
+      const nv = !!(e as CustomEvent).detail
+      if (nv === onRef.current) return
+      setOn(nv)
+      try {
+        localStorage.setItem(KEY_ON, nv ? "1" : "0")
+      } catch {}
+      broadcast(nv)
+    }
+    window.addEventListener("set-night", setExplicit)
+    return () => {
+      window.removeEventListener("toggle-night", toggle)
+      window.removeEventListener("set-night", setExplicit)
+    }
   }, [])
 
   const dismiss = (enable: boolean) => {

@@ -15,7 +15,11 @@ export async function GET(req: Request) {
   const user = await getCurrentUserRow()
   if (!user) return jsonResponse({ error: "Unauthorized" }, { status: 401 }, req)
   return jsonResponse(
-    { connected: !!user.gmailAppPassword, address: user.gmailAddress || user.email },
+    {
+      connected: !!(user.gmailAppPassword || user.gmailRefreshToken),
+      method: user.gmailRefreshToken ? "oauth" : user.gmailAppPassword ? "app_password" : null,
+      address: user.gmailAddress || user.email,
+    },
     { status: 200 },
     req
   )

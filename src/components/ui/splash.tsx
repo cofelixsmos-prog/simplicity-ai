@@ -2,7 +2,7 @@
 
 // A considered first-paint screen — the "S" mark breathing on the deep
 // background — shown while auth/data resolves, instead of a bare spinner.
-export function Splash() {
+export function Splash({ onDone }: { onDone?: () => void }) {
   return (
     <div className="flex h-dvh flex-col items-center justify-center gap-5 bg-background">
       <span className="anim-float flex size-14 items-center justify-center rounded-2xl border border-white/15 bg-white/[0.03] shadow-[0_20px_60px_-20px_rgba(0,0,0,0.8)]">

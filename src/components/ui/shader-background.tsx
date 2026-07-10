@@ -33,12 +33,16 @@ export function ShaderBackground({
   fixed = false,
   status = "idle",
   calm = false,
+  focus = false,
 }: {
   fixed?: boolean
   status?: BgStatus
   // When there's content to read (a panel open, an answer streaming), the world
   // recedes: the animation slows and a soft dim settles in so glass stays legible.
   calm?: boolean
+  // Focus mode: the world nearly stops — animation to ~0.2x, heavier blur, lower
+  // saturation and brightness — so the chat is all that stands out.
+  focus?: boolean
 }) {
   const [mounted, setMounted] = useState(false)
   const [webgl, setWebgl] = useState(true)
@@ -111,6 +115,8 @@ export function ShaderBackground({
   // Cool (morning) drift is gated by Auto Morning, and suppressed while Night is on.
   const coolWeight = nightManual === "on" ? 0 : autoMorning ? Math.max(0, -temp) : 0
   const idle = status === "idle"
+  // Focus mode nearly stops the motion (~0.2x).
+  const speedMul = focus ? 0.2 : 1
 
   const common = {
     style: { width: "100%", height: "100%" } as const,
@@ -124,12 +130,15 @@ export function ShaderBackground({
   }
 
   return (
-    <div className={`${fixed ? "fixed" : "absolute"} inset-0 -z-0 overflow-hidden bg-background`}>
+    <div
+      className={`${fixed ? "fixed" : "absolute"} inset-0 -z-0 overflow-hidden bg-background transition-[filter] duration-[900ms] ease-out`}
+      style={focus ? { filter: "saturate(0.7) brightness(0.55)" } : undefined}
+    >
       {mounted &&
         (webgl ? (
           <>
-            {/* Base gray shader — always animating (slower when calm). */}
-            <MeshGradient {...common} colors={COLORS} speed={animate ? (calm ? 0.28 : 0.6) : 0} />
+            {/* Base gray shader — always animating (slower when calm/focused). */}
+            <MeshGradient {...common} colors={COLORS} speed={animate ? (calm ? 0.28 : 0.6) * speedMul : 0} />
             {/* Warm layer (~3500K) — cross-fades in as the clock approaches
                 night, or fully when night mode is manually forced on. */}
             <div
@@ -187,10 +196,11 @@ export function ShaderBackground({
             }`}
           />
         ))}
-      {/* calm dim — the world recedes when there's content to read */}
+      {/* calm/focus dim — the world recedes when there's content to read, and
+          recedes further in focus mode so only the chat stands out */}
       <div
         className={`pointer-events-none absolute inset-0 bg-black transition-opacity duration-[1800ms] ease-out ${
-          calm ? "opacity-40" : "opacity-0"
+          focus ? "opacity-[0.62]" : calm ? "opacity-40" : "opacity-0"
         }`}
       />
       {/* vignette to keep edges deep */}

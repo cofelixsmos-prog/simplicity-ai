@@ -2,7 +2,7 @@
 
 import { useRef, useState, type InputHTMLAttributes } from "react"
 import Link from "next/link"
-import { Loader2, ArrowRight, ArrowLeft, Moon, Sunrise, Mail } from "lucide-react"
+import { Loader2, ArrowRight, ArrowLeft, Moon, Sunrise } from "lucide-react"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
 import { DEFAULT_SETTINGS } from "@/lib/settings"
@@ -15,11 +15,11 @@ import { DEFAULT_SETTINGS } from "@/lib/settings"
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
-type RegisterStep = "name" | "email" | "password" | "rules" | "gmail" | "settings"
+type RegisterStep = "name" | "email" | "password" | "rules" | "settings"
 type LoginStep = "email" | "password"
 type Step = RegisterStep | LoginStep
 
-const REGISTER_STEPS: RegisterStep[] = ["name", "email", "password", "rules", "gmail", "settings"]
+const REGISTER_STEPS: RegisterStep[] = ["name", "email", "password", "rules", "settings"]
 const LOGIN_STEPS: LoginStep[] = ["email", "password"]
 
 export function AuthCard({ mode }: { mode: "login" | "register" }) {
@@ -31,7 +31,6 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [rules, setRules] = useState("")
-  const [gmailAppPassword, setGmailAppPassword] = useState("")
   const [autoNight, setAutoNight] = useState(DEFAULT_SETTINGS.autoNight)
   const [autoMorning, setAutoMorning] = useState(DEFAULT_SETTINGS.autoMorning)
 
@@ -53,9 +52,6 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
       if (isRegister && password.length < 8) return "Password must be at least 8 characters."
       if (!isRegister && !password) return "Enter your password."
     }
-    // Gmail is optional — only validate when the user actually started filling it in.
-    if (step === "gmail" && gmailAppPassword.trim() && gmailAppPassword.replace(/\s+/g, "").length !== 16)
-      return "A Gmail App Password is 16 characters, or skip this step."
     return null
   }
 
@@ -109,7 +105,6 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
             password,
             systemPrompt: rules.trim() || undefined,
             settings: { autoNight, autoMorning },
-            gmailAppPassword: gmailAppPassword.trim() || undefined,
           }
         : { email: email.trim(), password }
       const res = await fetch(`/api/auth/${mode}`, {
@@ -195,8 +190,6 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
                 setPassword={setPassword}
                 rules={rules}
                 setRules={setRules}
-                gmailAppPassword={gmailAppPassword}
-                setGmailAppPassword={setGmailAppPassword}
                 autoNight={autoNight}
                 setAutoNight={setAutoNight}
                 autoMorning={autoMorning}
@@ -285,11 +278,6 @@ function stepCopy(mode: "login" | "register", step: Step): { heading: string; su
           heading: "Teach Simplicity your rules.",
           sub: "Optional — how should it always behave for you?",
         }
-      case "gmail":
-        return {
-          heading: "Connect Gmail to send email.",
-          sub: "Optional — add a Gmail App Password so Simplicity can send for you.",
-        }
       case "settings":
         return { heading: "A couple of preferences.", sub: "You can change these anytime." }
     }
@@ -314,8 +302,6 @@ function StepBody({
   setPassword,
   rules,
   setRules,
-  gmailAppPassword,
-  setGmailAppPassword,
   autoNight,
   setAutoNight,
   autoMorning,
@@ -332,8 +318,6 @@ function StepBody({
   setPassword: (v: string) => void
   rules: string
   setRules: (v: string) => void
-  gmailAppPassword: string
-  setGmailAppPassword: (v: string) => void
   autoNight: boolean
   setAutoNight: (v: boolean) => void
   autoMorning: boolean
@@ -397,38 +381,6 @@ function StepBody({
         placeholder="e.g. Always answer concisely. I'm a civil engineer — prefer metric units and cite sources."
         className="w-full resize-none rounded-xl border border-white/12 bg-black/20 px-4 py-3 text-[15px] leading-relaxed text-white outline-none transition-colors placeholder:text-white/30 focus:border-white/40"
       />
-    )
-
-  if (step === "gmail")
-    return (
-      <div className="space-y-3">
-        <div className="relative">
-          <Mail className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-white/25" />
-          <input
-            autoFocus
-            value={gmailAppPassword}
-            onChange={(e) => setGmailAppPassword(e.target.value)}
-            onKeyDown={enterKey}
-            type="password"
-            inputMode="text"
-            placeholder="16-character App Password"
-            autoComplete="off"
-            className="w-full rounded-xl border border-white/12 bg-black/20 py-3.5 pl-11 pr-4 font-mono text-[15px] tracking-wide text-white outline-none transition-colors placeholder:font-sans placeholder:tracking-normal placeholder:text-white/30 focus:border-white/40"
-          />
-        </div>
-        <p className="px-1 text-xs leading-relaxed text-white/40">
-          Not your Gmail password — a 16-character App Password. Turn on 2-Step Verification, then create one at{" "}
-          <a
-            href="https://myaccount.google.com/apppasswords"
-            target="_blank"
-            rel="noreferrer"
-            className="text-white/70 underline underline-offset-2 hover:text-white"
-          >
-            myaccount.google.com/apppasswords
-          </a>
-          . We send from your account email ({email || "your address"}), and it&apos;s stored encrypted.
-        </p>
-      </div>
     )
 
   // settings

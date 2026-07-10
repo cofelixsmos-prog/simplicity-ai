@@ -8,7 +8,9 @@
 import { randomUUID } from "crypto"
 import { eq } from "drizzle-orm"
 import { db, initDb } from "@/lib/db"
+import { addMemory, setUserSettings } from "@/lib/db/repo"
 import { drafts, apps, type User } from "@/lib/db/schema"
+import { parseSettings, serializeSettings } from "@/lib/settings"
 import { listMessages, modifyMessages, saveDraft, friendlyImapError, type ModifyAction } from "@/lib/imap"
 
 export interface ToolSchema {
@@ -54,35 +56,85 @@ interface AgentTool {
   run: (args: Record<string, unknown>, ctx?: ToolCtx) => Promise<ToolResult>
 }
 
-// ── web_search: Google Programmable Search (JSON API) ────────────────────────
+// ── web_search: Tavily (preferred) or Google Programmable Search ─────────────
+// Tavily needs just one free key (TAVILY_API_KEY) and returns clean content plus
+// a synthesized answer — ideal for grounding. Google Programmable Search works
+// too if its two keys are set. Either provider makes research trustworthy.
 async function webSearch(args: Record<string, unknown>): Promise<ToolResult> {
   const query = String(args.query ?? "").trim()
   if (!query) return { result: "No query was provided.", detail: "no query" }
 
-  const key = process.env.GOOGLE_SEARCH_API_KEY
-  const cx = process.env.GOOGLE_SEARCH_CX
-  if (!key || !cx) {
+  if (process.env.TAVILY_API_KEY) {
+    const r = await tavilySearch(query).catch(() => null)
+    if (r) return r
+  }
+  if (process.env.GOOGLE_SEARCH_API_KEY && process.env.GOOGLE_SEARCH_CX) {
+    const r = await googleSearch(query).catch(() => null)
+    if (r) return r
+  }
+  return {
+    result:
+      "Live web search isn't configured on this server. Answer from your own knowledge, but CLEARLY warn the user " +
+      "that live web grounding is unavailable — so anything time-sensitive (recent events, prices, specifics like " +
+      "names/dates) may be inaccurate and should be verified. Do not fabricate precise facts you're unsure of.",
+    detail: "not configured",
+  }
+}
+
+async function tavilySearch(query: string): Promise<ToolResult | null> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 15_000)
+  try {
+    const res = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: process.env.TAVILY_API_KEY,
+        query,
+        max_results: 6,
+        search_depth: "basic",
+        include_answer: true,
+      }),
+      signal: ctrl.signal,
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as {
+      answer?: string
+      results?: { title?: string; url?: string; content?: string }[]
+    }
+    const results = data.results ?? []
+    if (results.length === 0 && !data.answer) return null
+    const lines = results
+      .slice(0, 6)
+      .map((it, i) => `${i + 1}. ${it.title ?? "(untitled)"}\n   ${it.url ?? ""}\n   ${(it.content ?? "").slice(0, 300)}`)
     return {
       result:
-        "Live web search is not configured on this server (missing GOOGLE_SEARCH_API_KEY / GOOGLE_SEARCH_CX). " +
-        "Answer from your own knowledge and tell the user that live grounding is currently unavailable.",
-      detail: "not configured",
+        (data.answer ? `Synthesized answer: ${data.answer}\n\n` : "") +
+        `Sources for "${query}":\n\n${lines.join("\n\n")}\n\n` +
+        "Ground your answer in these and cite the relevant links.",
+      detail: `${results.length} results`,
     }
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
   }
+}
 
+async function googleSearch(query: string): Promise<ToolResult | null> {
+  const key = process.env.GOOGLE_SEARCH_API_KEY as string
+  const cx = process.env.GOOGLE_SEARCH_CX as string
   const url =
     `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(key)}` +
     `&cx=${encodeURIComponent(cx)}&num=5&q=${encodeURIComponent(query)}`
-
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), 15_000)
   try {
     const res = await fetch(url, { signal: ctrl.signal })
-    if (!res.ok) return { result: `Search failed (HTTP ${res.status}).`, detail: "error" }
+    if (!res.ok) return null
     const data = (await res.json()) as { items?: { title?: string; link?: string; snippet?: string }[] }
     const items = data.items ?? []
-    if (items.length === 0) return { result: `No results found for "${query}".`, detail: "0 results" }
-
+    if (items.length === 0) return null
     const lines = items
       .slice(0, 5)
       .map((it, i) => `${i + 1}. ${it.title ?? "(untitled)"}\n   ${it.link ?? ""}\n   ${it.snippet ?? ""}`)
@@ -93,7 +145,7 @@ async function webSearch(args: Record<string, unknown>): Promise<ToolResult> {
       detail: `${items.length} results`,
     }
   } catch {
-    return { result: "The search request timed out or failed to reach Google.", detail: "error" }
+    return null
   } finally {
     clearTimeout(timer)
   }
@@ -489,7 +541,7 @@ async function prepareEmail(args: Record<string, unknown>, ctx?: ToolCtx): Promi
 
 // ── read_emails: fetch/search the user's Gmail inbox (IMAP, read-only) ───────
 async function readEmails(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
-  if (!ctx?.user?.gmailAppPassword)
+  if (!(ctx?.user?.gmailAppPassword || ctx?.user?.gmailRefreshToken))
     return { result: "Gmail isn't connected, so the inbox can't be read. Tell the user to connect Gmail first.", detail: "not connected" }
   const query = args.query ? String(args.query).slice(0, 200) : undefined
   const limit = Math.min(Math.max(Number(args.limit) || 15, 1), 40)
@@ -538,7 +590,7 @@ async function deleteEmails(args: Record<string, unknown>): Promise<ToolResult> 
 
 // ── modify_emails: change message state (flags / archive), reversible ────────
 async function modifyEmails(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
-  if (!ctx?.user?.gmailAppPassword)
+  if (!(ctx?.user?.gmailAppPassword || ctx?.user?.gmailRefreshToken))
     return { result: "Gmail isn't connected. Tell the user to connect Gmail first.", detail: "not connected" }
   const ids = Array.isArray(args.ids) ? (args.ids as unknown[]).map((n) => Number(n)).filter(Number.isFinite) : []
   const action = String(args.action ?? "") as ModifyAction
@@ -555,7 +607,7 @@ async function modifyEmails(args: Record<string, unknown>, ctx?: ToolCtx): Promi
 
 // ── save_draft: create a draft in the user's Gmail Drafts folder ──────────────
 async function saveDraftTool(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
-  if (!ctx?.user?.gmailAppPassword)
+  if (!(ctx?.user?.gmailAppPassword || ctx?.user?.gmailRefreshToken))
     return { result: "Gmail isn't connected. Tell the user to connect Gmail first.", detail: "not connected" }
   const to = String(args.to ?? "").trim()
   const subject = String(args.subject ?? "").trim().slice(0, 300)
@@ -566,6 +618,212 @@ async function saveDraftTool(args: Record<string, unknown>, ctx?: ToolCtx): Prom
     return { result: `Draft saved to Gmail Drafts${to ? ` (to ${to})` : ""}. The user can find it in Gmail.`, detail: "draft saved" }
   } catch (e) {
     return { result: `Couldn't save the draft: ${friendlyImapError(e)}.`, detail: "error" }
+  }
+}
+
+// ── control_ui: change app settings/appearance on the user's behalf ─────────
+// Emits a UI event the chat client applies (night warmth, focus mode, ambient
+// sound); the auto_* preferences also persist to the account.
+async function controlUi(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  const action = String(args.action ?? "")
+  const value = String(args.value ?? "") === "on" ? "on" : "off"
+  const level = ["light", "deep", "study"].includes(String(args.level)) ? String(args.level) : undefined
+
+  const NAMES: Record<string, string> = {
+    night: "Night mode (warm, dimmed ambience)",
+    focus: "Focus mode",
+    ambient_sound: "Ambient study sound",
+    auto_night: "Auto Night (evening wind-down)",
+    auto_morning: "Auto Morning (cool morning drift)",
+  }
+  if (!NAMES[action]) {
+    return { result: `Unknown setting "${action}". Available: ${Object.keys(NAMES).join(", ")}.`, detail: "unknown" }
+  }
+
+  // Persist account-level preferences; ambient/visual ones are session-local.
+  if ((action === "auto_night" || action === "auto_morning") && ctx?.user) {
+    const s = parseSettings(ctx.user.settings)
+    if (action === "auto_night") s.autoNight = value === "on"
+    else s.autoMorning = value === "on"
+    await setUserSettings(ctx.user.id, serializeSettings(s)).catch(() => {})
+  }
+
+  return {
+    result:
+      `Done — ${NAMES[action]} is now ${value}${action === "focus" && level ? ` (${level})` : ""}. ` +
+      "The change is already applied on screen; confirm it briefly and naturally.",
+    detail: `${action} ${value}`,
+    ui: { t: "ui_control", control: action, value, ...(level ? { level } : {}) },
+  }
+}
+
+// ── create_pdf: generate a REAL PDF file (attachable, downloadable) ──────────
+// Unlike the inline ```pdf preview block, this produces actual PDF bytes stored
+// server-side, so it can be attached to an email, saved, and downloaded.
+async function createPdf(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user) return { result: "Can't create a file here (no signed-in user).", detail: "no user" }
+
+  const spec = {
+    title: args.title ? String(args.title).slice(0, 300) : undefined,
+    subtitle: args.subtitle ? String(args.subtitle).slice(0, 400) : undefined,
+    accent: args.accent ? String(args.accent) : undefined,
+    blocks: Array.isArray(args.blocks) ? (args.blocks as unknown[]) : [],
+  }
+  if (!spec.blocks.length && !spec.title)
+    return { result: "Provide a title and content blocks for the PDF.", detail: "empty" }
+
+  let buf: Buffer
+  try {
+    const { renderPdf } = await import("@/lib/pdf")
+    buf = renderPdf(spec as Parameters<typeof import("@/lib/pdf").renderPdf>[0])
+  } catch {
+    return { result: "Couldn't render that PDF — check the blocks are valid.", detail: "render error" }
+  }
+
+  const base =
+    String(args.filename || spec.title || "document")
+      .replace(/\.pdf$/i, "")
+      .replace(/[^\w.-]+/g, "_")
+      .slice(0, 80) || "document"
+  const name = `${base}.pdf`
+
+  const { createUpload } = await import("@/lib/db/repo")
+  const id = await createUpload(ctx.user.id, name, "application/pdf", buf.toString("base64"))
+
+  // Register it as a turn attachment so a following prepare_email attaches it.
+  ctx.attachments = [...(ctx.attachments ?? []), { id, name }]
+
+  return {
+    result:
+      `Created the PDF “${name}” (${Math.round(buf.length / 1024)} KB). It's shown to the user with a download button, ` +
+      `and it's staged as an attachment. To EMAIL it: call prepare_email now and put "${name}" in that email's ` +
+      `attachments array (for a single email it also auto-attaches). To save it to Drive, mention it — it's stored.`,
+    detail: name,
+    ui: { t: "file", id, name, mime: "application/pdf", size: buf.length },
+  }
+}
+
+// ── list_artifacts: the apps/drafts the user has already made ────────────────
+async function listArtifacts(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user) return { result: "Can't list artifacts here.", detail: "no user" }
+  const { listUserArtifacts } = await import("@/lib/db/repo")
+  const items = await listUserArtifacts(ctx.user.id, 30).catch(() => [])
+  if (items.length === 0)
+    return { result: "The user hasn't made any apps or documents yet — nothing saved to reopen.", detail: "0" }
+  const lines = items.map((a, i) => `${i + 1}. ${a.title} — ${a.kind} · id: ${a.id}`)
+  return {
+    result:
+      `Artifacts the user has already created (from earlier in this or other chats):\n${lines.join("\n")}\n\n` +
+      "To change one, call update_app or update_draft with its id — don't rebuild it from scratch.",
+    detail: `${items.length} artifacts`,
+  }
+}
+
+// ── Google Drive: search / read / save files ────────────────────────────────
+const driveReconnectMsg =
+  "Drive access hasn't been granted yet (the Google connection predates Drive support). " +
+  "Tell the user to reconnect Google — call manage_gmail with action 'connect' — to grant Drive access."
+
+async function searchDrive(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!(ctx?.user?.gmailRefreshToken))
+    return { result: "Google Drive isn't connected. Ask the user to connect Google (manage_gmail, action 'connect').", detail: "not connected" }
+  const { searchDrive: run, RECONNECT, kindOf } = await import("@/lib/drive")
+  const query = args.query ? String(args.query).slice(0, 200) : undefined
+  const limit = Math.min(Math.max(Number(args.limit) || 15, 1), 40)
+  const r = await run(ctx.user, query, limit).catch(() => ({ error: "The Drive search failed." }))
+  if ("error" in r) return { result: r.error === RECONNECT ? driveReconnectMsg : r.error, detail: "error" }
+  if (r.files.length === 0) return { result: query ? `No Drive files match "${query}".` : "No files found in Drive.", detail: "0 results" }
+  const lines = r.files.map((f, i) => `${i + 1}. ${f.name} [${kindOf(f.mimeType)}]\n   id: ${f.id}\n   ${f.link}`)
+  return {
+    result: `Drive files${query ? ` for "${query}"` : ""}:\n\n${lines.join("\n\n")}\n\nUse read_drive_file with an id to read one.`,
+    detail: `${r.files.length} files`,
+  }
+}
+
+async function readDriveFile(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!(ctx?.user?.gmailRefreshToken))
+    return { result: "Google Drive isn't connected. Ask the user to connect Google first.", detail: "not connected" }
+  const fileId = String(args.file_id ?? "").trim()
+  if (!fileId) return { result: "No file id was given. Use search_drive to find one first.", detail: "no id" }
+  const { readDriveFile: run, RECONNECT } = await import("@/lib/drive")
+  const r = await run(ctx.user, fileId).catch(() => ({ error: "Couldn't read that file." }))
+  if ("error" in r) return { result: r.error === RECONNECT ? driveReconnectMsg : r.error, detail: "error" }
+  return { result: `Contents of “${r.name}”:\n\n${r.text}`, detail: r.name.slice(0, 40) }
+}
+
+async function saveToDrive(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!(ctx?.user?.gmailRefreshToken))
+    return { result: "Google Drive isn't connected. Ask the user to connect Google first.", detail: "not connected" }
+  const name = String(args.name ?? "").trim().slice(0, 200)
+  const content = String(args.content ?? "")
+  if (!name || !content) return { result: "Both a file name and content are required to save to Drive.", detail: "missing" }
+  const mimeType = String(args.mime_type || "text/markdown")
+  const { createDriveFile: run, RECONNECT } = await import("@/lib/drive")
+  const r = await run(ctx.user, name, content, mimeType).catch(() => ({ error: "Couldn't save to Drive." }))
+  if ("error" in r) return { result: r.error === RECONNECT ? driveReconnectMsg : r.error, detail: "error" }
+  return {
+    result: `Saved “${r.name}” to the user's Google Drive. Share the link so they can open it: ${r.link}`,
+    detail: r.name.slice(0, 40),
+  }
+}
+
+// ── manage_gmail: connect / test / disconnect the user's Gmail from chat ─────
+async function manageGmail(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  const action = String(args.action ?? "")
+  const connected = !!(ctx?.user?.gmailAppPassword || ctx?.user?.gmailRefreshToken)
+
+  if (action === "test") {
+    if (!ctx?.user || !connected) {
+      return {
+        result: "No Gmail is connected yet, so there's nothing to test. Offer to connect it (action=connect).",
+        detail: "not connected",
+        ui: { t: "gmail_status", connected: false },
+      }
+    }
+    const { verifyGmail } = await import("@/lib/email")
+    const r = await verifyGmail(ctx.user).catch(() => ({ ok: false, error: "The test couldn't run." }))
+    return {
+      result: r.ok
+        ? "Gmail connection verified — sending works. Confirm briefly."
+        : `Gmail test failed: ${r.error ?? "unknown error"}. Tell the user plainly and suggest reconnecting (action=connect) with a fresh App Password.`,
+      detail: r.ok ? "ok" : "failed",
+      ui: { t: "gmail_status", connected, ok: r.ok, error: r.ok ? undefined : r.error },
+    }
+  }
+
+  if (action === "connect") {
+    return {
+      result:
+        "Sending the user to Google's secure sign-in to connect Gmail (OAuth — they approve access on Google's " +
+        "own page; no passwords involved). Tell them they're being redirected to sign in with Google.",
+      detail: "connect",
+      ui: { t: "gmail_connect" },
+    }
+  }
+
+  if (action === "disconnect") {
+    return {
+      result: connected
+        ? "Disconnecting the user's Gmail. Confirm it's removed."
+        : "No Gmail was connected. Nothing to disconnect.",
+      detail: "disconnect",
+      ui: { t: "gmail_disconnect" },
+    }
+  }
+
+  return { result: `Unknown Gmail action "${action}". Use connect, test, or disconnect.`, detail: "unknown" }
+}
+
+// ── remember: save a durable fact about the user to long-term memory ─────────
+async function remember(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  const fact = String(args.fact ?? "").trim()
+  if (!fact) return { result: "Nothing to remember — no fact given.", detail: "empty" }
+  if (!ctx?.user) return { result: "Can't save to memory here (user not identified). Just continue.", detail: "no user" }
+  const saved = await addMemory(ctx.user.id, fact).catch(() => null)
+  if (!saved) return { result: "Already in memory — nothing new to save.", detail: "known" }
+  return {
+    result: `Saved to long-term memory: "${saved.content}". Don't recite it back; just continue naturally.`,
+    detail: saved.content.slice(0, 40),
   }
 }
 
@@ -716,13 +974,13 @@ export const TOOLS: Record<string, AgentTool> = {
         parameters: {
           type: "object",
           properties: {
-            query: { type: "string", description: "The search query to send to Google." },
+            query: { type: "string", description: "The web search query." },
           },
           required: ["query"],
         },
       },
     },
-    label: (a) => `Searching Google for “${String(a.query ?? "").slice(0, 80)}”`,
+    label: (a) => `Searching the web for “${String(a.query ?? "").slice(0, 80)}”`,
     run: webSearch,
   },
   get_datetime: {
@@ -993,6 +1251,193 @@ export const TOOLS: Record<string, AgentTool> = {
     },
     label: () => "Saving a Gmail draft",
     run: saveDraftTool,
+  },
+  create_pdf: {
+    schema: {
+      type: "function",
+      function: {
+        name: "create_pdf",
+        description:
+          "Generate a REAL, downloadable PDF file (not just a preview) that can be attached to an email or saved. " +
+          "Use this whenever a PDF needs to actually exist — the user asks to email a PDF, download one, or save one. " +
+          "After calling it, the file is staged; call prepare_email next (listing the returned filename in attachments) " +
+          "to send it. Same block format as the inline pdf preview.",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "Document title (shown on the cover)." },
+            subtitle: { type: "string", description: "Optional subtitle." },
+            accent: { type: "string", description: "Optional hex accent color, e.g. DC2626." },
+            filename: { type: "string", description: "Optional file name (without .pdf); defaults from the title." },
+            blocks: {
+              type: "array",
+              description:
+                "Content blocks, in order. Each is one of: {type:'heading',text,level:1|2}, {type:'paragraph',text}, " +
+                "{type:'list',items:[...],ordered?}, {type:'table',columns:[...],rows:[[...]]}, {type:'callout',text}, {type:'divider'}.",
+              items: { type: "object" },
+            },
+          },
+          required: ["title", "blocks"],
+        },
+      },
+    },
+    label: (a) => `Creating PDF “${String(a.title ?? "document").slice(0, 50)}”`,
+    run: createPdf,
+  },
+  list_artifacts: {
+    schema: {
+      type: "function",
+      function: {
+        name: "list_artifacts",
+        description:
+          "List the apps and documents the user has already created (across all their chats), with ids. Use when " +
+          "they refer to something you made before (\"the app you built\", \"my report\", \"that draft\") so you can " +
+          "reopen or edit it with update_app / update_draft instead of starting over.",
+        parameters: { type: "object", properties: {} },
+      },
+    },
+    label: () => "Looking up your artifacts",
+    run: listArtifacts,
+  },
+  search_drive: {
+    schema: {
+      type: "function",
+      function: {
+        name: "search_drive",
+        description:
+          "Search or list the user's Google Drive files. Use when they ask about their Drive, a document/sheet/slide " +
+          "they have, or to find a file before reading it. Returns names + ids; pass an id to read_drive_file.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Words to match in file names/contents. Omit to list recent files." },
+            limit: { type: "number", description: "Max results (default 15)." },
+          },
+        },
+      },
+    },
+    label: (a) => (a.query ? `Searching Drive for “${String(a.query).slice(0, 60)}”` : "Listing Drive files"),
+    run: searchDrive,
+  },
+  read_drive_file: {
+    schema: {
+      type: "function",
+      function: {
+        name: "read_drive_file",
+        description:
+          "Read the text of a Google Drive file by id (from search_drive). Google Docs/Sheets/Slides and text files " +
+          "are supported; binary files return a link instead.",
+        parameters: {
+          type: "object",
+          properties: { file_id: { type: "string", description: "The Drive file id from search_drive." } },
+          required: ["file_id"],
+        },
+      },
+    },
+    label: () => "Reading a Drive file",
+    run: readDriveFile,
+  },
+  save_to_drive: {
+    schema: {
+      type: "function",
+      function: {
+        name: "save_to_drive",
+        description:
+          "Save content as a new file in the user's Google Drive — e.g. a draft, report, notes, or a summary they " +
+          "asked to keep. Defaults to Markdown. Use when they ask to save something to Drive.",
+        parameters: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "File name, e.g. \"Physics Notes.md\"." },
+            content: { type: "string", description: "The file's text content." },
+            mime_type: { type: "string", description: "MIME type (default text/markdown; e.g. text/plain, text/csv)." },
+          },
+          required: ["name", "content"],
+        },
+      },
+    },
+    label: (a) => `Saving “${String(a.name ?? "file").slice(0, 60)}” to Drive`,
+    run: saveToDrive,
+  },
+  manage_gmail: {
+    schema: {
+      type: "function",
+      function: {
+        name: "manage_gmail",
+        description:
+          "Connect, test, or disconnect the user's Gmail — right from chat. Use 'test' when they ask if email/Gmail " +
+          "is working or set up; 'connect' when they want to connect Gmail or when a send fails for lack of a " +
+          "connection (it redirects them to Google's secure sign-in — no passwords, you never handle credentials); " +
+          "'disconnect' to remove it.",
+        parameters: {
+          type: "object",
+          properties: {
+            action: { type: "string", enum: ["test", "connect", "disconnect"], description: "What to do." },
+          },
+          required: ["action"],
+        },
+      },
+    },
+    label: (a) => `Gmail: ${a.action === "test" ? "testing connection" : a.action === "connect" ? "connecting" : "disconnecting"}`,
+    run: manageGmail,
+  },
+  control_ui: {
+    schema: {
+      type: "function",
+      function: {
+        name: "control_ui",
+        description:
+          "Change the app's settings/appearance for the user, right from chat: night mode (warm dim ambience), " +
+          "focus mode (optionally with a level), ambient study sound, and the persistent Auto Night / Auto Morning " +
+          "preferences. Use whenever the user asks to change the look, dim the screen, enable/exit focus, play or " +
+          "stop the study sound, or turn the automatic evening/morning ambience on or off.",
+        parameters: {
+          type: "object",
+          properties: {
+            action: {
+              type: "string",
+              enum: ["night", "focus", "ambient_sound", "auto_night", "auto_morning"],
+              description: "Which setting to change.",
+            },
+            value: { type: "string", enum: ["on", "off"], description: "Turn it on or off." },
+            level: {
+              type: "string",
+              enum: ["light", "deep", "study"],
+              description: "Focus depth — only with action=focus.",
+            },
+          },
+          required: ["action", "value"],
+        },
+      },
+    },
+    label: (a) => `Turning ${String(a.action ?? "setting").replace(/_/g, " ")} ${a.value === "off" ? "off" : "on"}`,
+    run: controlUi,
+  },
+  remember: {
+    schema: {
+      type: "function",
+      function: {
+        name: "remember",
+        description:
+          "Save a durable fact about the user to long-term memory so you recall it in FUTURE chats: a stable " +
+          "preference (how they like answers, tone), a goal or ongoing project, their name/role, or an important " +
+          "detail they volunteer. Call it the moment such a fact appears. Do NOT save transient chit-chat, one-off " +
+          "task specifics, things already in memory, or anything sensitive they didn't clearly choose to share.",
+        parameters: {
+          type: "object",
+          properties: {
+            fact: {
+              type: "string",
+              description:
+                'The fact, concise and in third person — e.g. "Prefers short, direct answers" or "Is building a React study app called Simplicity".',
+            },
+          },
+          required: ["fact"],
+        },
+      },
+    },
+    label: (a) => `Remembering: ${String(a.fact ?? "").slice(0, 56)}`,
+    run: remember,
   },
   spawn_agents: {
     schema: {

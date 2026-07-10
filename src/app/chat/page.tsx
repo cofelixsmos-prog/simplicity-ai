@@ -28,7 +28,9 @@ import {
   X,
   Loader2,
   Mail,
-  Mic,
+  Focus,
+  LayoutGrid,
+  Settings,
 } from "lucide-react"
 import { MessageContent, type Visual } from "@/components/ui/message-content"
 import { ToolActivity, type Step } from "@/components/ui/tool-activity"
@@ -39,7 +41,13 @@ import { DraftCanvas, type DraftData } from "@/components/ui/draft-canvas"
 import { CodeCanvas, type AppData } from "@/components/ui/code-canvas"
 import { EmailApprovalCard, type StagedEmail } from "@/components/ui/email-card"
 import { InboxCard, DeleteEmailCard, type InboxItem, type DeleteItem } from "@/components/ui/email-inbox-card"
-import { VoiceMode } from "@/components/ui/voice-mode"
+import { InactivityDim } from "@/components/ui/inactivity-dim"
+import { DictionaryLookup } from "@/components/ui/dictionary-lookup"
+import { MemoryPanel } from "@/components/ui/memory-panel"
+import { ChatsPanel } from "@/components/ui/chats-panel"
+import { ArtifactsPanel } from "@/components/ui/artifacts-panel"
+import { FocusBar } from "@/components/ui/focus-bar"
+import { AmbientSound } from "@/components/ui/ambient-sound"
 import { StatusBoard } from "@/components/ui/status-board"
 import { CommandPalette, type Command } from "@/components/ui/command-palette"
 import { type ConvoLite } from "@/components/ui/chat-sidebar"
@@ -52,7 +60,7 @@ import { Tooltip } from "@/components/ui/tooltip"
 import { toast } from "@/components/ui/toast"
 import { playSend, playDone, playType, playBackspace } from "@/lib/sound"
 import { MODELS, DEFAULT_MODEL_ID, getModel } from "@/lib/models"
-import { parseSettings, mirrorSettingsToLocal } from "@/lib/settings"
+import { parseSettings, mirrorSettingsToLocal, readLocalFlag, LS_AUTO_NIGHT, LS_AUTO_MORNING, DEFAULT_SETTINGS } from "@/lib/settings"
 
 interface Message {
   role: "user" | "assistant"
@@ -70,6 +78,10 @@ interface Message {
   // (not just when first created).
   app?: AppData
   draft?: DraftData
+  // A generated file (e.g. a create_pdf result) offered as a download.
+  file?: { id: string; name: string; mime?: string; size?: number }
+  // Whether the staged email was already sent (persisted so reload shows "sent").
+  emailSent?: boolean
 }
 
 interface PdfAttachment {
@@ -177,10 +189,24 @@ function ArtifactCard({
   )
 }
 
+// The Simplicity monogram — the same drawn "S" as the splash, in a subtle glass
+// tile, so the brand mark reads consistently everywhere.
 function LogoMark({ className = "" }: { className?: string }) {
   return (
-    <span className={`flex items-center justify-center rounded-lg bg-foreground text-background ${className}`}>
-      <span className="text-[11px] font-bold tracking-tight">S</span>
+    <span
+      className={`flex items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] shadow-[0_6px_18px_-8px_rgba(0,0,0,0.7)] ${className}`}
+    >
+      <svg viewBox="0 0 100 100" className="size-[56%] overflow-visible">
+        <path
+          d="M70,32 C70,21 56,17 45,21 C33,25 31,37 43,43 C55,49 70,51 69,63 C68,76 52,81 39,76 C32,74 29,69 28,63"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="9"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="text-white"
+        />
+      </svg>
     </span>
   )
 }
@@ -189,6 +215,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+  // Holds the cinematic splash for its full reveal once per session.
+  const [splashHold, setSplashHold] = useState(true)
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
   const [modelId, setModelId] = useState(DEFAULT_MODEL_ID)
   const [reasoning, setReasoning] = useState<Reasoning>("medium")
@@ -232,13 +260,46 @@ export default function ChatPage() {
   const [attachments, setAttachments] = useState<PdfAttachment[]>([])
   const [uploadingPdf, setUploadingPdf] = useState(false)
   const pdfInputRef = useRef<HTMLInputElement>(null)
-  // Hands-free voice conversation overlay.
-  const [voiceOpen, setVoiceOpen] = useState(false)
+  // Focus mode — quiets the UI, dims/blurs the background, makes the AI concise
+  // and on-task, and enables double-click dictionary lookups.
+  const [focusMode, setFocusMode] = useState(false)
+  // Focus level shapes how far it goes: Light (gentle), Deep (concise), Study (coach).
+  const [focusLevel, setFocusLevel] = useState<"light" | "deep" | "study">("deep")
+  const [ambientOn, setAmbientOn] = useState(false)
+  // Long-term memory viewer (what the assistant remembers about the user).
+  const [memoryOpen, setMemoryOpen] = useState(false)
+  // Chats manager (search / pin / rename / delete conversations).
+  const [chatsOpen, setChatsOpen] = useState(false)
+  // Artifacts gallery (all apps/drafts across every chat).
+  const [artifactsOpen, setArtifactsOpen] = useState(false)
 
   // Compute greeting on the client only (avoids SSR/hydration mismatch).
   useEffect(() => {
     setGreeting(getGreeting())
   }, [])
+
+  // Returned from Google OAuth (?gmail=connected|denied|error|unconfigured).
+  useEffect(() => {
+    const g = new URLSearchParams(window.location.search).get("gmail")
+    if (!g) return
+    const messages: Record<string, string> = {
+      connected: "Gmail connected securely with Google ✓",
+      denied: "Gmail connection was cancelled.",
+      error: "Couldn't connect Gmail. Please try again.",
+      unconfigured: "Google sign-in isn't set up on this server.",
+    }
+    if (messages[g]) toast(messages[g])
+    if (g === "connected") setGmailConnected(true)
+    window.history.replaceState({}, "", window.location.pathname) // don't re-toast on refresh
+  }, [])
+
+  // Auto-dismiss the splash once the user is loaded.
+  useEffect(() => {
+    if (user !== undefined && splashHold) {
+      const t = setTimeout(() => setSplashHold(false), 1200)
+      return () => clearTimeout(t)
+    }
+  }, [user, splashHold])
 
   // Require auth; load the user and their conversations.
   useEffect(() => {
@@ -453,12 +514,44 @@ export default function ChatPage() {
       if (!res.ok) return
       const d = await res.json()
       setMessages(
-        (d.messages ?? []).map((m: { role: "user" | "assistant"; content: string }) => ({
-          role: m.role,
-          content: m.content,
-        }))
+        (d.messages ?? []).map((m: { role: "user" | "assistant"; content: string; artifacts?: string | null }) => {
+          const msg: Message = { role: m.role, content: m.content }
+          if (m.artifacts) {
+            try {
+              const a = JSON.parse(m.artifacts) as {
+                app?: AppData
+                draft?: DraftData
+                attachments?: { name: string }[]
+                email?: StagedEmail[]
+                inbox?: InboxItem[]
+                deleteEmails?: DeleteItem[]
+                file?: { id: string; name: string; mime?: string; size?: number }
+              }
+              if (a.app) msg.app = a.app
+              if (a.draft) msg.draft = a.draft
+              if (a.attachments) msg.attachments = a.attachments
+              if (a.email) msg.email = a.email
+              if (a.inbox) msg.inbox = a.inbox
+              if (a.deleteEmails) msg.deleteEmails = a.deleteEmails
+              if (a.file) msg.file = a.file
+              if ((a as Record<string, unknown>).emailSent) msg.emailSent = true
+            } catch {}
+          }
+          return msg
+        })
       )
       setConversationId(id)
+      // Mark all loaded assistant messages as "answered" / plan-decided so
+      // questions and plan blocks render in their completed state on reload.
+      const loaded = d.messages ?? []
+      const answeredSet = new Set<number>()
+      const decisions: Record<number, "approved" | "denied"> = {}
+      loaded.forEach((_: unknown, i: number) => {
+        answeredSet.add(i)
+        decisions[i] = "approved"
+      })
+      setAnsweredIdx(answeredSet)
+      setPlanDecisions(decisions)
     } catch {}
   }
 
@@ -470,6 +563,33 @@ export default function ChatPage() {
     if (conversationId === id) reset()
   }
 
+  const renameConvo = async (id: string, title: string) => {
+    setConversations((c) => c.map((x) => (x.id === id ? { ...x, title } : x)))
+    try {
+      await fetch(`/api/conversations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      })
+    } catch {}
+  }
+
+  const pinConvo = async (id: string, pinned: boolean) => {
+    // Optimistically update + resort (pinned first, then most-recent).
+    setConversations((c) =>
+      [...c.map((x) => (x.id === id ? { ...x, pinned: pinned ? 1 : 0 } : x))].sort(
+        (a, b) => (b.pinned ?? 0) - (a.pinned ?? 0) || b.updatedAt - a.updatedAt
+      )
+    )
+    try {
+      await fetch(`/api/conversations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned }),
+      })
+    } catch {}
+  }
+
   const logout = async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST" })
@@ -477,32 +597,12 @@ export default function ChatPage() {
     window.location.href = "/login"
   }
 
-  // ── Gmail connection (from the command palette) ─────────────────────────────
-  const connectGmail = async () => {
-    const raw = window.prompt(
-      "Paste your 16-character Gmail App Password.\n\nCreate one at myaccount.google.com/apppasswords (needs 2-Step Verification). Emails send from your account email."
-    )
-    if (raw == null) return
-    const appPassword = raw.replace(/\s+/g, "")
-    if (appPassword.length !== 16) {
-      toast("A Gmail App Password is 16 characters.")
-      return
-    }
-    try {
-      const res = await fetch("/api/gmail", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appPassword }),
-      })
-      if (!res.ok) {
-        toast((await res.json().catch(() => ({}))).error ?? "Couldn't connect Gmail.")
-        return
-      }
-      setGmailConnected(true)
-      toast("Gmail connected. Run “Test Gmail connection” to verify.")
-    } catch {
-      toast("Network error connecting Gmail.")
-    }
+  // ── Gmail connection — secure Google OAuth (no passwords) ───────────────────
+  // Sends the user to Google's consent screen; the /auth/google/callback route
+  // stores the refresh token and returns to /chat?gmail=connected.
+  const connectGmail = () => {
+    toast("Redirecting to Google to connect Gmail…")
+    window.location.href = "/api/gmail/oauth/start"
   }
 
   const testGmail = async () => {
@@ -589,7 +689,13 @@ export default function ChatPage() {
       fetch(`/api/conversations/${convoId}/messages`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: "user", content: trimmed }),
+        body: JSON.stringify({
+          role: "user",
+          content: trimmed,
+          artifacts: pendingAttachments.length
+            ? { attachments: pendingAttachments.map((a) => ({ name: a.name })) }
+            : undefined,
+        }),
       }).catch(() => {})
 
     try {
@@ -602,6 +708,7 @@ export default function ChatPage() {
           reasoning: model.supportsReasoning ? reasoning : "off",
           systemPrompt: userRules || undefined,
           gmailConnected,
+          focus: focusMode ? focusLevel : false,
           // Files uploaded this turn — available for the AI to attach to an email.
           attachments: pendingAttachments.length
             ? pendingAttachments.map((a) => ({ id: a.attachmentId, name: a.name }))
@@ -631,6 +738,7 @@ export default function ChatPage() {
       let deleteEmails: DeleteItem[] | undefined
       let app: AppData | undefined
       let draft: DraftData | undefined
+      let file: { id: string; name: string; mime?: string; size?: number } | undefined
 
       // Replace the trailing assistant placeholder with the latest text/steps/agents.
       const flush = () => {
@@ -646,6 +754,7 @@ export default function ChatPage() {
             deleteEmails,
             app,
             draft,
+            file,
           }
           return copy
         })
@@ -680,6 +789,12 @@ export default function ChatPage() {
             emails?: StagedEmail[]
             batchId?: string
             items?: InboxItem[] | DeleteItem[]
+            control?: string
+            value?: string
+            level?: string
+            connected?: boolean
+            mime?: string
+            size?: number
           }
           try {
             ev = JSON.parse(t)
@@ -749,6 +864,36 @@ export default function ChatPage() {
               deleteEmails = ev.items as DeleteItem[]
               flush()
             }
+          } else if (ev.t === "gmail_connect") {
+            connectGmail()
+          } else if (ev.t === "gmail_disconnect") {
+            disconnectGmail()
+          } else if (ev.t === "gmail_status") {
+            // Keep the client's connected flag in sync with what the tool saw.
+            if (typeof ev.connected === "boolean") setGmailConnected(ev.connected)
+          } else if (ev.t === "ui_control") {
+            // The assistant changed a setting on the user's behalf — apply it.
+            const on = ev.value === "on"
+            if (ev.control === "night") {
+              window.dispatchEvent(new CustomEvent("set-night", { detail: on }))
+            } else if (ev.control === "focus") {
+              setFocusMode(on)
+              if (on && (ev.level === "light" || ev.level === "deep" || ev.level === "study")) setFocusLevel(ev.level)
+            } else if (ev.control === "ambient_sound") {
+              setAmbientOn(on)
+            } else if (ev.control === "auto_night" || ev.control === "auto_morning") {
+              // DB is updated server-side by the tool; mirror locally so the
+              // ambient components react without a reload.
+              mirrorSettingsToLocal({
+                ...DEFAULT_SETTINGS,
+                autoNight: ev.control === "auto_night" ? on : readLocalFlag(LS_AUTO_NIGHT),
+                autoMorning: ev.control === "auto_morning" ? on : readLocalFlag(LS_AUTO_MORNING),
+              })
+            }
+          } else if (ev.t === "file") {
+            // A generated file (create_pdf) — show a download card.
+            if (ev.id && ev.name) file = { id: ev.id, name: ev.name, mime: ev.mime, size: ev.size }
+            flush()
           } else if (ev.t === "code") {
             // The coding agent built/edited an app — open it in the code canvas
             // and keep it on the message so it can be reopened later.
@@ -798,12 +943,24 @@ export default function ChatPage() {
       // The turn finished cleanly — one low, warm settle.
       if (!stoppedRef.current && acc.trim()) playDone()
 
-      // Persist the assistant's final answer, then refresh the sidebar order.
+      // Persist the assistant's final answer + its reopenable artifacts (apps,
+      // drafts, emails, files), then refresh the sidebar order.
       if (convoId && acc.trim()) {
+        const artifacts: Record<string, unknown> = {}
+        if (app) artifacts.app = app
+        if (draft) artifacts.draft = draft
+        if (email) artifacts.email = email
+        if (inbox) artifacts.inbox = inbox
+        if (deleteEmails) artifacts.deleteEmails = deleteEmails
+        if (file) artifacts.file = file
         fetch(`/api/conversations/${convoId}/messages`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ role: "assistant", content: acc }),
+          body: JSON.stringify({
+            role: "assistant",
+            content: acc,
+            ...(Object.keys(artifacts).length ? { artifacts } : {}),
+          }),
         })
           .then(() => refreshConversations())
           .catch(() => {})
@@ -822,6 +979,31 @@ export default function ChatPage() {
       abortRef.current = null
       setLoading(false)
       setThinking(false)
+    }
+  }
+
+  // Mark a message's email as sent and persist the flag.
+  const markEmailSent = (idx: number) => {
+    setMessages((m) => {
+      const copy = [...m]
+      copy[idx] = { ...copy[idx], emailSent: true }
+      return copy
+    })
+    if (conversationId) {
+      const msg = messages[idx]
+      if (msg?.email) {
+        const artifacts: Record<string, unknown> = {}
+        if (msg.app) artifacts.app = msg.app
+        if (msg.draft) artifacts.draft = msg.draft
+        if (msg.email) artifacts.email = msg.email
+        if (msg.file) artifacts.file = msg.file
+        artifacts.emailSent = true
+        fetch(`/api/conversations/${conversationId}/messages`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ index: idx, artifacts }),
+        }).catch(() => {})
+      }
     }
   }
 
@@ -922,6 +1104,10 @@ export default function ChatPage() {
         }))
       : []),
     { id: "night", group: "Actions", label: "Toggle Night mode", icon: Moon, keywords: "dark warm dim evening night", run: () => window.dispatchEvent(new Event("toggle-night")) },
+    { id: "focus", group: "Actions", label: focusMode ? "Exit Focus mode" : "Enter Focus mode", icon: Focus, keywords: "focus concentrate deep study distraction dim dictionary", run: () => setFocusMode((v) => !v) },
+    { id: "memory", group: "Actions", label: "View memory", icon: Brain, keywords: "memory remember personalization facts what you know forget privacy", run: () => setMemoryOpen(true) },
+    { id: "chats", group: "Actions", label: "Manage chats", icon: MessageSquare, keywords: "search rename pin delete conversations history organize", run: () => setChatsOpen(true) },
+    { id: "go-settings", group: "Go to", label: "Settings", icon: Settings, keywords: "preferences account gmail drive system prompt dimming animation", run: () => (window.location.href = "/settings") },
     { id: "go-home", group: "Go to", label: "Home", icon: Home, run: () => (window.location.href = "/") },
     { id: "go-dev", group: "Go to", label: "Developers", icon: Code2, run: () => (window.location.href = "/developers") },
     { id: "go-res", group: "Go to", label: "Resources", icon: BookOpen, run: () => (window.location.href = "/resources") },
@@ -930,7 +1116,7 @@ export default function ChatPage() {
           { id: "gmail-test", group: "Account", label: "Test Gmail connection", icon: Mail, keywords: "email smtp verify", run: testGmail } as Command,
           { id: "gmail-disconnect", group: "Account", label: "Disconnect Gmail", icon: Mail, keywords: "email smtp remove", run: disconnectGmail } as Command,
         ]
-      : [{ id: "gmail-connect", group: "Account", label: "Connect Gmail", icon: Mail, keywords: "email smtp app password send", run: connectGmail } as Command]),
+      : [{ id: "gmail-connect", group: "Account", label: "Connect Gmail with Google", icon: Mail, keywords: "email gmail google oauth sign in connect send", run: connectGmail } as Command]),
     ...(conversationId
       ? [{ id: "del", group: "Account", label: "Delete this chat", icon: Trash2, run: () => deleteConvo(conversationId) } as Command]
       : []),
@@ -939,8 +1125,18 @@ export default function ChatPage() {
 
   const empty = messages.length === 0
 
-  // While auth resolves, show the branded splash (redirects to /login if signed out).
-  if (user === undefined) return <Splash />
+  const splash = splashHold ? <Splash /> : null
+
+  // While auth resolves, the splash covers a plain ground; the chat swaps in
+  // behind it and the splash dissolves onto the live page.
+  if (user === undefined) {
+    return (
+      <>
+        {splash}
+        <div className="h-dvh bg-background" />
+      </>
+    )
+  }
 
   // The world recedes while there's something to read: a panel open, a
   // sub-agent view, or an answer streaming in.
@@ -950,9 +1146,11 @@ export default function ChatPage() {
   const firstName = user?.name?.trim().split(/\s+/)[0] || user?.email?.split("@")[0] || ""
 
   return (
-    <div className="relative flex h-dvh">
+    <>
+      {splash}
+      <div className="relative flex h-dvh">
       {/* Same animated shader background as the landing page — tinted by app status */}
-      <ShaderBackground fixed status={bgStatus} calm={calmBg} />
+      <ShaderBackground fixed status={bgStatus} calm={calmBg} focus={focusMode} />
       <LiquidGlassFilters />
 
       {/* Welcome-back moment: glass card breathes in over the shader, holds,
@@ -960,7 +1158,54 @@ export default function ChatPage() {
       {showWelcome && (
         <WelcomeOverlay name={firstName} kind={welcomeKind} onDone={() => setShowWelcome(false)} />
       )}
-      <VoiceMode open={voiceOpen} onClose={() => setVoiceOpen(false)} model={modelId} />
+
+      {/* Dims the screen after 15s of no activity (sooner/deeper in focus mode) */}
+      <InactivityDim seconds={15} focus={focusMode} />
+      {/* Focus mode: level bar, ambient soundscape, and double-click dictionary */}
+      {focusMode && (
+        <FocusBar
+          level={focusLevel}
+          onLevel={setFocusLevel}
+          ambientOn={ambientOn}
+          onAmbient={() => setAmbientOn((v) => !v)}
+          onExit={() => setFocusMode(false)}
+        />
+      )}
+      <AmbientSound on={focusMode && ambientOn} />
+      {focusMode && <DictionaryLookup />}
+      {/* Long-term memory viewer */}
+      <MemoryPanel open={memoryOpen} onClose={() => setMemoryOpen(false)} />
+      {/* Artifacts gallery — every app/draft the user has made, reopenable */}
+      <ArtifactsPanel
+        open={artifactsOpen}
+        onClose={() => setArtifactsOpen(false)}
+        onOpenApp={(a) => {
+          setPanelDraft(null)
+          setPanelVisual(null)
+          setAgentPanelIdx(null)
+          setPanelApp(a)
+        }}
+        onOpenDraft={(d) => {
+          setPanelApp(null)
+          setPanelVisual(null)
+          setAgentPanelIdx(null)
+          setPanelDraft(d)
+        }}
+      />
+      {/* Chats manager — search / pin / rename / delete */}
+      <ChatsPanel
+        open={chatsOpen}
+        conversations={conversations}
+        activeId={conversationId}
+        onClose={() => setChatsOpen(false)}
+        onSelect={(id) => {
+          setChatsOpen(false)
+          loadConversation(id)
+        }}
+        onRename={renameConvo}
+        onPin={pinConvo}
+        onDelete={deleteConvo}
+      />
 
       {/* ⌘K command palette */}
       <CommandPalette commands={commands} />
@@ -976,8 +1221,13 @@ export default function ChatPage() {
             downtime ? "pointer-events-none opacity-0" : "opacity-100"
           }`}
         >
-        {/* Minimal floating top: just the brand + new chat */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 py-4">
+        {/* Minimal floating top: just the brand + new chat. In focus mode it
+            recedes (quieter chrome) and gently reveals on hover. */}
+        <div
+          className={`group/top pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 py-4 transition-opacity duration-500 ${
+            focusMode ? "opacity-25 hover:opacity-100" : "opacity-100"
+          }`}
+        >
           <a
             href="/"
             className="pointer-events-auto flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-white/90 transition-colors hover:text-white"
@@ -1029,6 +1279,15 @@ export default function ChatPage() {
                 </>
               )}
             </div>
+            <Tooltip label="Artifacts" side="bottom">
+              <button
+                onClick={() => setArtifactsOpen(true)}
+                aria-label="View all artifacts"
+                className="inline-flex size-9 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <LayoutGrid className="size-4" />
+              </button>
+            </Tooltip>
             <Tooltip label="Command palette" side="bottom">
               <button
                 onClick={() => window.dispatchEvent(new Event("open-cmdk"))}
@@ -1143,12 +1402,35 @@ export default function ChatPage() {
                             (m.inbox && m.inbox.length > 0) ||
                             (m.deleteEmails && m.deleteEmails.length > 0) ||
                             m.app ||
-                            m.draft ? null : (
+                            m.draft ||
+                            m.file ? null : (
                             <div className="flex items-center pt-1">
                               <span className="size-2 animate-pulse rounded-full bg-white/55" />
                             </div>
                           )}
-                          {m.email && m.email.length > 0 && <EmailApprovalCard emails={m.email} />}
+                          {m.file && (
+                            <a
+                              href={`/api/uploads/${m.file.id}?download`}
+                              className="mt-3 inline-flex items-center gap-3 rounded-2xl border border-white/12 bg-white/[0.04] px-4 py-3 transition-colors hover:border-white/25 hover:bg-white/[0.07]"
+                            >
+                              <span className="flex size-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05]">
+                                <FileText className="size-4 text-white/70" />
+                              </span>
+                              <span className="min-w-0">
+                                <span className="block truncate text-[14px] font-medium text-white">{m.file.name}</span>
+                                <span className="block text-[11px] text-white/45">
+                                  {m.file.size ? `${Math.round(m.file.size / 1024)} KB · ` : ""}Download
+                                </span>
+                              </span>
+                            </a>
+                          )}
+                          {m.email && m.email.length > 0 && (
+                            <EmailApprovalCard
+                              emails={m.email}
+                              sent={m.emailSent}
+                              onSent={() => markEmailSent(i)}
+                            />
+                          )}
                           {m.inbox && m.inbox.length > 0 && <InboxCard items={m.inbox} />}
                           {m.deleteEmails && m.deleteEmails.length > 0 && <DeleteEmailCard items={m.deleteEmails} />}
                           {m.app && (
@@ -1308,15 +1590,18 @@ export default function ChatPage() {
                     </button>
                   </Tooltip>
 
-                  {/* Voice mode */}
-                  <Tooltip label="Talk to Simplicity" side="top">
+                  {/* Focus mode */}
+                  <Tooltip label={focusMode ? "Exit focus mode" : "Focus mode"} side="top">
                     <button
                       type="button"
-                      onClick={() => setVoiceOpen(true)}
-                      aria-label="Start voice mode"
-                      className="inline-flex size-8 items-center justify-center rounded-full text-white/55 transition-colors hover:bg-white/10 hover:text-white"
+                      onClick={() => setFocusMode((v) => !v)}
+                      aria-label={focusMode ? "Exit focus mode" : "Enter focus mode"}
+                      aria-pressed={focusMode}
+                      className={`inline-flex size-8 items-center justify-center rounded-full transition-colors ${
+                        focusMode ? "bg-white/15 text-white" : "text-white/55 hover:bg-white/10 hover:text-white"
+                      }`}
                     >
-                      <Mic className="size-4" />
+                      <Focus className="size-4" />
                     </button>
                   </Tooltip>
 
@@ -1434,6 +1719,7 @@ export default function ChatPage() {
           </>
         )
       })()}
-    </div>
+      </div>
+    </>
   )
 }

@@ -1,5 +1,5 @@
 import { jsonResponse, preflight, clientIp, rateLimit } from "@/lib/api/http"
-import { hashPassword, startSession } from "@/lib/auth"
+import { hashPassword, startSession, MAX_PASSWORD_LEN } from "@/lib/auth"
 import { createUser, getUserByEmail } from "@/lib/db/repo"
 import { MAX_SYSTEM_PROMPT, parseSettings, serializeSettings } from "@/lib/settings"
 import { encryptSecret } from "@/lib/crypto"
@@ -45,8 +45,9 @@ export async function POST(req: Request) {
   // 16 letters, often shown in spaced groups of four — strip whitespace first.
   const gmailAppPasswordRaw = body.gmailAppPassword ? String(body.gmailAppPassword).replace(/\s+/g, "") : ""
 
-  if (!EMAIL_RE.test(email)) return jsonResponse({ error: "Enter a valid email address." }, { status: 400 }, req)
+  if (!EMAIL_RE.test(email) || email.length > 320) return jsonResponse({ error: "Enter a valid email address." }, { status: 400 }, req)
   if (password.length < 8) return jsonResponse({ error: "Password must be at least 8 characters." }, { status: 400 }, req)
+  if (password.length > MAX_PASSWORD_LEN) return jsonResponse({ error: "Password is too long." }, { status: 400 }, req)
   if (gmailAppPasswordRaw && gmailAppPasswordRaw.length !== 16)
     return jsonResponse({ error: "A Gmail App Password is 16 characters." }, { status: 400 }, req)
 

@@ -30,30 +30,15 @@ const defaultModels: Model[] = [
     id: "r1",
     codename: "R1",
     name: "Simplicity R1",
-    tagline: "Frontier reasoning model",
+    tagline: "One model. Everything you need.",
     description:
-      "Our most capable model. Built for deep, multi-step reasoning, long-context comprehension, and the most demanding tasks across research, engineering, and analysis.",
+      "Fast, capable, and always on. Built to focus, research, build real deliverables, and orchestrate a swarm of agents — without the noise of choosing between models.",
     badge: "Flagship",
     flagship: true,
     specs: [
-      { label: "Context window", value: "1M tokens" },
-      { label: "Reasoning", value: "Extended" },
-      { label: "Knowledge cutoff", value: "2025" },
-    ],
-    ctaText: "Request access",
-  },
-  {
-    id: "a1",
-    codename: "A1",
-    name: "Simplicity A1",
-    tagline: "Fast general-purpose model",
-    description:
-      "Optimized for speed and efficiency. Ideal for conversation, drafting, summarization, and high-throughput workloads where latency and cost are priorities.",
-    badge: "Standard",
-    specs: [
       { label: "Context window", value: "128K tokens" },
-      { label: "Latency", value: "Sub-second" },
-      { label: "Knowledge cutoff", value: "2025" },
+      { label: "Tools", value: "Full agentic suite" },
+      { label: "Availability", value: "Free, always on" },
     ],
     ctaText: "Get started",
   },
@@ -74,16 +59,15 @@ export function ModelsSection({
             Models
           </p>
           <h2 className="text-3xl sm:text-4xl md:text-[44px] font-semibold tracking-tight leading-[1.1] text-foreground">
-            A model for every workload.
+            One model. No decisions.
           </h2>
           <p className="mt-5 text-base sm:text-lg text-muted-foreground leading-relaxed">
-            Two models, one philosophy — capability without unnecessary
-            complexity. Choose frontier reasoning or fast, efficient
-            intelligence.
+            No dropdown of tradeoffs to agonize over — just one capable model,
+            tuned to do everything Simplicity does, always on.
           </p>
         </Reveal>
 
-        <Reveal delay={120} className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border md:grid-cols-2">
+        <Reveal delay={120} className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border">
           {models.map((model) => (
             <article
               key={model.id}

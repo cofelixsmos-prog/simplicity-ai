@@ -84,7 +84,13 @@ export function MessageContent({
   questionsAnswered?: boolean
   planDecision?: "approved" | "denied" | null
 }) {
-  const openFences = (content.match(/```/g) || []).length
+  // Models sometimes glue a fenced block onto the previous sentence
+  // ("…make a PDF.```pdf {…"). Markdown only recognizes ``` at the start of a
+  // line, so force every triple-backtick fence onto its own line — otherwise a
+  // pdf/ppt/chart/etc. block renders as raw JSON instead of the real preview.
+  const normalized = content.replace(/([^\n`])(```)/g, "$1\n\n$2")
+
+  const openFences = (normalized.match(/```/g) || []).length
   const lastBlockUnclosed = streaming && openFences % 2 === 1
 
   return (
@@ -202,7 +208,7 @@ export function MessageContent({
           ),
         }}
       >
-        {content}
+        {normalized}
       </ReactMarkdown>
       {streaming && <span className="streaming-caret text-foreground/50" />}
     </div>

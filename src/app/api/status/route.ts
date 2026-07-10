@@ -61,14 +61,14 @@ export async function GET(req: Request) {
     return jsonResponse(cache.data, { status: 200 }, req)
   }
 
-  const [groq, opencode] = await Promise.all([probe(PROVIDERS.groq), probe(PROVIDERS.opencode)])
+  const opencode = await probe(PROVIDERS.opencode)
   const search: Health =
-    process.env.GOOGLE_SEARCH_API_KEY && process.env.GOOGLE_SEARCH_CX ? "operational" : "unconfigured"
+    process.env.TAVILY_API_KEY || (process.env.GOOGLE_SEARCH_API_KEY && process.env.GOOGLE_SEARCH_CX)
+      ? "operational"
+      : "unconfigured"
 
   const services = [
-    { id: "r1", label: "R1", role: "reasoning", status: groq.status, latency: groq.latency },
-    { id: "a1", label: "A1", role: "fast", status: groq.status, latency: groq.latency },
-    { id: "d1", label: "D1", role: "coder", status: opencode.status, latency: opencode.latency },
+    { id: "r1", label: "R1", role: "model", status: opencode.status, latency: opencode.latency },
     { id: "search", label: "Search", role: "web", status: search, latency: null },
   ]
 

@@ -5,28 +5,31 @@ import { Terminal, Zap, Code2, Boxes, Gauge, Lock } from "lucide-react"
 export const metadata = {
   title: "Developers — Simplicity",
   description:
-    "Build with Simplicity. A clean, OpenAI-compatible API for A1 and R1 — streaming, fast, and simple.",
+    "Build with Simplicity. A clean, OpenAI-compatible API for R1 — streaming, fast, and simple.",
 }
 
 const features = [
   { icon: Zap, title: "Streaming first", desc: "Token-by-token responses over a standard stream. Low latency, no polling." },
   { icon: Code2, title: "OpenAI-compatible", desc: "Drop-in chat completions shape. Reuse the clients and tooling you already have." },
   { icon: Boxes, title: "Multi-format output", desc: "Ask for flowcharts, 2D SVG illustrations, or 3D models — rendered client-side." },
-  { icon: Gauge, title: "Pick your tradeoff", desc: "A1 for speed, R1 for frontier reasoning with adjustable effort." },
+  { icon: Gauge, title: "One capable model", desc: "R1 — fast, agentic, and always on. No model-picker decisions." },
   { icon: Lock, title: "Keys stay server-side", desc: "Calls run through your backend. Your API key is never exposed to the browser." },
   { icon: Terminal, title: "Tiny surface area", desc: "One endpoint, a messages array, and a model id. That's the whole API." },
 ]
 
 const codeSample = `// app/api/chat/route.ts
-import Groq from "groq-sdk"
+import OpenAI from "openai"
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
+const simplicity = new OpenAI({
+  apiKey: process.env.SIMPLICITY_API_KEY,
+  baseURL: "https://api.simplicity.ai/v1",
+})
 
 export async function POST(req: Request) {
-  const { messages, model } = await req.json()
+  const { messages } = await req.json()
 
-  const stream = await groq.chat.completions.create({
-    model,                 // "a1" → fast · "r1" → reasoning
+  const stream = await simplicity.chat.completions.create({
+    model: "r1",           // the one Simplicity model
     messages,
     stream: true,
   })

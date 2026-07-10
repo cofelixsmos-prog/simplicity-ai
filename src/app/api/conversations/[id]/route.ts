@@ -1,6 +1,6 @@
 import { jsonResponse, preflight } from "@/lib/api/http"
 import { getCurrentUser } from "@/lib/auth"
-import { deleteConversation, getConversation, listMessages, renameConversation } from "@/lib/db/repo"
+import { deleteConversation, getConversation, listMessages, renameConversation, setConversationPinned } from "@/lib/db/repo"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -24,11 +24,15 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!user) return jsonResponse({ error: "Unauthorized" }, { status: 401 }, req)
   const { id } = await ctx.params
   if (!(await getConversation(id, user.id))) return jsonResponse({ error: "Not found" }, { status: 404 }, req)
-  let body: { title?: string }
+  let body: { title?: string; pinned?: boolean }
   try {
     body = await req.json()
   } catch {
     return jsonResponse({ error: "Invalid body" }, { status: 400 }, req)
+  }
+  if (typeof body.pinned === "boolean") {
+    await setConversationPinned(id, user.id, body.pinned)
+    return jsonResponse({ ok: true }, { status: 200 }, req)
   }
   const title = String(body.title ?? "").trim().slice(0, 200)
   if (!title) return jsonResponse({ error: "Title required" }, { status: 400 }, req)

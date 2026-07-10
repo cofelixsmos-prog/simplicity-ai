@@ -50,10 +50,13 @@ export const users = sqliteTable("users", {
   systemPrompt: text("system_prompt"),
   // JSON blob of UserSettings (autoNight / autoMorning). See src/lib/settings.ts.
   settings: text("settings"),
-  // Optional Gmail SMTP connection for sending email. The address is plaintext;
-  // the App Password is encrypted at rest (AES-256-GCM, see src/lib/crypto.ts).
+  // Optional Gmail connection. The address is plaintext; the credential is
+  // encrypted at rest (AES-256-GCM, see src/lib/crypto.ts). Two auth methods are
+  // supported: a Google OAuth refresh token (preferred, secure) or a legacy
+  // App Password. Either being present means "connected".
   gmailAddress: text("gmail_address"),
   gmailAppPassword: text("gmail_app_password"),
+  gmailRefreshToken: text("gmail_refresh_token"),
   createdAt: integer("created_at").notNull(),
 })
 
@@ -69,6 +72,8 @@ export const conversations = sqliteTable("conversations", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull(),
   title: text("title").notNull(),
+  // 1 if the user pinned this chat to the top; 0 otherwise.
+  pinned: integer("pinned").notNull().default(0),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 })
@@ -78,8 +83,23 @@ export const messages = sqliteTable("messages", {
   conversationId: text("conversation_id").notNull(),
   role: text("role").notNull(), // "user" | "assistant"
   content: text("content").notNull(),
+  // JSON blob of reopenable artifacts attached to this message —
+  // { app?, draft?, attachments? } — so they survive a chat reload.
+  artifacts: text("artifacts"),
   createdAt: integer("created_at").notNull(),
 })
+
+// A durable fact the assistant has learned about the user (a preference, goal,
+// ongoing project, or personal detail). Injected into the chat system prompt so
+// the assistant stays personalized across conversations.
+export const memories = sqliteTable("memories", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  content: text("content").notNull(),
+  createdAt: integer("created_at").notNull(),
+})
+
+export type Memory = typeof memories.$inferSelect
 
 export type User = typeof users.$inferSelect
 export type Session = typeof sessions.$inferSelect

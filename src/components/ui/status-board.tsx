@@ -182,8 +182,6 @@ export function StatusBoard({
 }
 
 const PLACEHOLDER: Service[] = [
-  { id: "r1", label: "R1", role: "reasoning", status: "down", latency: null },
-  { id: "a1", label: "A1", role: "fast", status: "down", latency: null },
-  { id: "d1", label: "D1", role: "coder", status: "down", latency: null },
+  { id: "r1", label: "R1", role: "model", status: "down", latency: null },
   { id: "search", label: "Search", role: "web", status: "down", latency: null },
 ]

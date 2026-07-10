@@ -4,16 +4,28 @@
 // localStorage for the client-only ambient components to read.
 
 export interface UserSettings {
-  // Auto Night mode — the evening wind-down invitation (see night-mode.tsx).
   autoNight: boolean
-  // Auto Morning mode — the cool, brighter ambient drift in the morning hours
-  // (the shader's cool temperature layer). Off pins the morning neutral.
   autoMorning: boolean
+  // Inactivity dimming (seconds before dimming). 0 = off.
+  dimDelay: number
+  // Dim opacity (0–1, higher = darker).
+  dimOpacity: number
+  // Focus mode dim opacity override (typically deeper than normal).
+  focusDimOpacity: number
+  // Shader animation speed multiplier (0 = frozen, 1 = default).
+  animSpeed: number
+  // Focus mode animation speed multiplier.
+  focusAnimSpeed: number
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
   autoNight: true,
   autoMorning: true,
+  dimDelay: 15,
+  dimOpacity: 0.4,
+  focusDimOpacity: 0.62,
+  animSpeed: 1,
+  focusAnimSpeed: 0.2,
 }
 
 // Parse the stored JSON string defensively — anything missing/invalid falls
@@ -25,6 +37,11 @@ export function parseSettings(raw: string | null | undefined): UserSettings {
     return {
       autoNight: o.autoNight !== false,
       autoMorning: o.autoMorning !== false,
+      dimDelay: typeof o.dimDelay === "number" ? o.dimDelay : DEFAULT_SETTINGS.dimDelay,
+      dimOpacity: typeof o.dimOpacity === "number" ? o.dimOpacity : DEFAULT_SETTINGS.dimOpacity,
+      focusDimOpacity: typeof o.focusDimOpacity === "number" ? o.focusDimOpacity : DEFAULT_SETTINGS.focusDimOpacity,
+      animSpeed: typeof o.animSpeed === "number" ? o.animSpeed : DEFAULT_SETTINGS.animSpeed,
+      focusAnimSpeed: typeof o.focusAnimSpeed === "number" ? o.focusAnimSpeed : DEFAULT_SETTINGS.focusAnimSpeed,
     }
   } catch {
     return { ...DEFAULT_SETTINGS }
@@ -32,7 +49,7 @@ export function parseSettings(raw: string | null | undefined): UserSettings {
 }
 
 export function serializeSettings(s: UserSettings): string {
-  return JSON.stringify({ autoNight: !!s.autoNight, autoMorning: !!s.autoMorning })
+  return JSON.stringify(s)
 }
 
 // ── localStorage mirror ───────────────────────────────────────────────────────

@@ -17,9 +17,29 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Simplicity — Intelligence without complexity",
+  title: {
+    default: "Simplicity R1",
+    template: "%s · Simplicity",
+  },
   description:
-    "Pure intelligence, distilled. Frontier-class reasoning refined down to what actually matters. Meet the A1 and R1 models.",
+    "Simplicity R1 — frontier reasoning refined down to what actually matters. Focus mode, real deliverables, memory, and an agent swarm in one calm assistant.",
+  applicationName: "Simplicity",
+  openGraph: {
+    title: "Simplicity R1",
+    description:
+      "Frontier reasoning refined down to what actually matters. Intelligence without complexity.",
+    siteName: "Simplicity",
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "Simplicity R1",
+    description: "Frontier reasoning refined down to what actually matters.",
+  },
+};
+
+export const viewport = {
+  themeColor: "#060607",
 };
 
 export default function RootLayout({

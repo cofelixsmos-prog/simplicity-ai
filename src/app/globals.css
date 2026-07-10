@@ -131,6 +131,12 @@
   }
   html {
     @apply font-sans;
+    scroll-behavior: smooth;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
   }
 
   /* One designed keyboard-focus ring across every control (text inputs keep
@@ -467,6 +473,63 @@
   .chat-start {
     animation: none;
   }
+}
+
+/* ── Landing hero: per-letter cinematic wordmark reveal ─────────
+   Each glyph rises out of a depth blur on its own beat (staggered via --i),
+   the same motion language as the splash. */
+@keyframes heroLetter {
+  from { opacity: 0; transform: translateY(0.45em); filter: blur(10px); }
+  to   { opacity: 1; transform: translateY(0);      filter: blur(0); }
+}
+.hero-letter {
+  display: inline-block;
+  opacity: 0;
+  animation: heroLetter 0.95s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: calc(var(--i) * 55ms + 180ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-letter { animation: none; opacity: 1; }
+}
+
+/* ── Cinematic splash — Apple-style per-letter reveal ───────────
+   Each glyph rises out of a deep depth-blur on its own beat while the whole
+   word settles forward and its tracking tightens; the tagline drifts up after.
+   The exit (fly-through zoom) is driven by phase classes in splash.tsx. */
+/* All delays subtract --off so a remount mid-sequence (auth resolving swaps the
+   tree) resumes exactly where it was instead of restarting — negative
+   animation-delay starts an animation partway through. */
+@keyframes splashLetter {
+  from { opacity: 0; transform: translateY(0.5em) scale(1.12); filter: blur(16px); }
+  to   { opacity: 1; transform: translateY(0) scale(1);        filter: blur(0); }
+}
+.splash-letter {
+  display: inline-block;
+  opacity: 0;
+  animation: splashLetter 1.1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: calc(var(--i) * 55ms + 250ms);
+}
+@keyframes splashSettle {
+  from { transform: scale(1.05); letter-spacing: 0.03em; }
+  to   { transform: scale(1);    letter-spacing: -0.028em; }
+}
+.splash-word {
+  animation: splashSettle 2s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(250ms);
+}
+@keyframes splashTag {
+  from { opacity: 0; transform: translateY(6px); letter-spacing: 0.58em; }
+  to   { opacity: 1; transform: translateY(0);   letter-spacing: 0.4em; }
+}
+.splash-tag {
+  opacity: 0;
+  animation: splashTag 1.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: calc(1350ms);
+}
+@media (prefers-reduced-motion: reduce) {
+  .splash-letter, .splash-word, .splash-tag { animation: none; }
+  .splash-letter, .splash-tag { opacity: 1; }
 }
 
 /* auth stepper affirmation ("Nice name.", "All done.") — a slow, unhurried

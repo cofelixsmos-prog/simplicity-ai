@@ -22,12 +22,14 @@ interface SendResult {
   error?: string
 }
 
-export function EmailApprovalCard({ emails }: { emails: StagedEmail[] }) {
+export function EmailApprovalCard({ emails, sent = false, onSent }: { emails: StagedEmail[]; sent?: boolean; onSent?: () => void }) {
   // Local editable copies so the user can tweak before sending ([Edit]).
   const [items, setItems] = useState<StagedEmail[]>(() => emails.map((e) => ({ ...e })))
-  const [phase, setPhase] = useState<Phase>("review")
+  const [phase, setPhase] = useState<Phase>(sent ? "done" : "review")
   const [countdown, setCountdown] = useState(UNDO_SECONDS)
-  const [results, setResults] = useState<SendResult[] | null>(null)
+  const [results, setResults] = useState<SendResult[] | null>(
+    sent ? emails.map((e) => ({ to: e.to, ok: true })) : null
+  )
   const [error, setError] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<{ token: string; count: number; external: number } | null>(null)
   const [confirmInput, setConfirmInput] = useState("")
@@ -87,6 +89,7 @@ export function EmailApprovalCard({ emails }: { emails: StagedEmail[] }) {
       setResults(data.results ?? [])
       setConfirm(null)
       setPhase("done")
+      onSent?.()
     } catch {
       setError("Network error — please try again.")
       setPhase("review")

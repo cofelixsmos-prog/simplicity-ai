@@ -6,6 +6,7 @@ export interface ConvoLite {
   id: string
   title: string
   updatedAt: number
+  pinned?: number
 }
 
 export function ChatSidebar({

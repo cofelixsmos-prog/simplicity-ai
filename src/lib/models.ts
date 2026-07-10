@@ -13,29 +13,15 @@ export interface ModelOption {
 
 export const MODELS: ModelOption[] = [
   {
-    id: "a1",
-    label: "A1",
-    name: "Simplicity A1",
-    description: "Fast, everyday intelligence",
-    supportsReasoning: false,
-  },
-  {
     id: "r1",
     label: "R1",
     name: "Simplicity R1",
-    description: "Frontier reasoning model",
-    supportsReasoning: true,
-  },
-  {
-    id: "d1",
-    label: "D1",
-    name: "Simplicity D1",
-    description: "Fast and free, always on",
+    description: "Fast, capable, always on",
     supportsReasoning: false,
   },
 ]
 
-export const DEFAULT_MODEL_ID = "d1"
+export const DEFAULT_MODEL_ID = "r1"
 
 export function getModel(id: string | undefined): ModelOption {
   return (
