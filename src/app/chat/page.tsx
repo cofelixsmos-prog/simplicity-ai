@@ -33,6 +33,7 @@ import {
   Settings,
 } from "lucide-react"
 import { MessageContent, type Visual } from "@/components/ui/message-content"
+import { PdfBlock, type PdfSpec } from "@/components/ui/pdf-block"
 import { ToolActivity, type Step } from "@/components/ui/tool-activity"
 import { AgentSwarm, type AgentCard } from "@/components/ui/agent-swarm"
 import { AgentPanel } from "@/components/ui/agent-panel"
@@ -78,8 +79,10 @@ interface Message {
   // (not just when first created).
   app?: AppData
   draft?: DraftData
-  // A generated file (e.g. a create_pdf result) offered as a download.
-  file?: { id: string; name: string; mime?: string; size?: number }
+  // A generated file (e.g. a create_pdf result) offered as a download. When the
+  // file is a PDF, `spec` carries the same document-block JSON as the inline
+  // ```pdf preview so it renders identically (title/blocks + a real download).
+  file?: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec }
   // Whether the staged email was already sent (persisted so reload shows "sent").
   emailSent?: boolean
 }
@@ -525,7 +528,7 @@ export default function ChatPage() {
                 email?: StagedEmail[]
                 inbox?: InboxItem[]
                 deleteEmails?: DeleteItem[]
-                file?: { id: string; name: string; mime?: string; size?: number }
+                file?: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec }
               }
               if (a.app) msg.app = a.app
               if (a.draft) msg.draft = a.draft
@@ -738,7 +741,7 @@ export default function ChatPage() {
       let deleteEmails: DeleteItem[] | undefined
       let app: AppData | undefined
       let draft: DraftData | undefined
-      let file: { id: string; name: string; mime?: string; size?: number } | undefined
+      let file: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec } | undefined
 
       // Replace the trailing assistant placeholder with the latest text/steps/agents.
       const flush = () => {
@@ -795,6 +798,7 @@ export default function ChatPage() {
             connected?: boolean
             mime?: string
             size?: number
+            spec?: PdfSpec
           }
           try {
             ev = JSON.parse(t)
@@ -891,8 +895,9 @@ export default function ChatPage() {
               })
             }
           } else if (ev.t === "file") {
-            // A generated file (create_pdf) — show a download card.
-            if (ev.id && ev.name) file = { id: ev.id, name: ev.name, mime: ev.mime, size: ev.size }
+            // A generated file (create_pdf) — show the same document-style
+            // preview as the inline ```pdf block when a spec is present.
+            if (ev.id && ev.name) file = { id: ev.id, name: ev.name, mime: ev.mime, size: ev.size, spec: ev.spec }
             flush()
           } else if (ev.t === "code") {
             // The coding agent built/edited an app — open it in the code canvas
@@ -1409,20 +1414,28 @@ export default function ChatPage() {
                             </div>
                           )}
                           {m.file && (
-                            <a
-                              href={`/api/uploads/${m.file.id}?download`}
-                              className="mt-3 inline-flex items-center gap-3 rounded-2xl border border-white/12 bg-white/[0.04] px-4 py-3 transition-colors hover:border-white/25 hover:bg-white/[0.07]"
-                            >
-                              <span className="flex size-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05]">
-                                <FileText className="size-4 text-white/70" />
-                              </span>
-                              <span className="min-w-0">
-                                <span className="block truncate text-[14px] font-medium text-white">{m.file.name}</span>
-                                <span className="block text-[11px] text-white/45">
-                                  {m.file.size ? `${Math.round(m.file.size / 1024)} KB · ` : ""}Download
+                            m.file.spec ? (
+                              <PdfBlock
+                                spec={m.file.spec}
+                                downloadUrl={`/api/uploads/${m.file.id}?download`}
+                                downloadName={m.file.name}
+                              />
+                            ) : (
+                              <a
+                                href={`/api/uploads/${m.file.id}?download`}
+                                className="mt-3 inline-flex items-center gap-3 rounded-2xl border border-white/12 bg-white/[0.04] px-4 py-3 transition-colors hover:border-white/25 hover:bg-white/[0.07]"
+                              >
+                                <span className="flex size-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05]">
+                                  <FileText className="size-4 text-white/70" />
                                 </span>
-                              </span>
-                            </a>
+                                <span className="min-w-0">
+                                  <span className="block truncate text-[14px] font-medium text-white">{m.file.name}</span>
+                                  <span className="block text-[11px] text-white/45">
+                                    {m.file.size ? `${Math.round(m.file.size / 1024)} KB · ` : ""}Download
+                                  </span>
+                                </span>
+                              </a>
+                            )
                           )}
                           {m.email && m.email.length > 0 && (
                             <EmailApprovalCard

@@ -34,9 +34,24 @@ function hexToRgb(hex: string): [number, number, number] {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 }
 
-export function PdfBlock({ code, streaming = false }: { code: string; streaming?: boolean }) {
+export function PdfBlock({
+  code,
+  streaming = false,
+  spec: specProp,
+  downloadUrl,
+  downloadName,
+}: {
+  code?: string
+  streaming?: boolean
+  // When the PDF was generated server-side (create_pdf), pass the spec + a
+  // real download URL directly instead of parsing `code` and regenerating
+  // client-side — same visual, but the download is the actual stored file.
+  spec?: PdfSpec
+  downloadUrl?: string
+  downloadName?: string
+}) {
   const [busy, setBusy] = useState(false)
-  const spec = parsePdf(code)
+  const spec = specProp ?? (code ? parsePdf(code) : null)
 
   if (streaming) {
     return (
@@ -199,14 +214,25 @@ export function PdfBlock({ code, streaming = false }: { code: string; streaming?
           <FileText className="size-4 text-white/70" />
           <span className="text-sm font-medium text-white">{spec.title ?? "Document"}</span>
         </div>
-        <button
-          onClick={download}
-          disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-xs font-medium text-black transition-all hover:scale-[1.02] disabled:opacity-50"
-        >
-          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-          .pdf
-        </button>
+        {downloadUrl ? (
+          <a
+            href={downloadUrl}
+            download={downloadName}
+            className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-xs font-medium text-black transition-all hover:scale-[1.02]"
+          >
+            <Download className="size-3.5" />
+            .pdf
+          </a>
+        ) : (
+          <button
+            onClick={download}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1.5 text-xs font-medium text-black transition-all hover:scale-[1.02] disabled:opacity-50"
+          >
+            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+            .pdf
+          </button>
+        )}
       </div>
 
       {/* paper-like preview */}

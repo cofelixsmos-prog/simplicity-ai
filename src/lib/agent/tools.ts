@@ -695,11 +695,11 @@ async function createPdf(args: Record<string, unknown>, ctx?: ToolCtx): Promise<
 
   return {
     result:
-      `Created the PDF “${name}” (${Math.round(buf.length / 1024)} KB). It's shown to the user with a download button, ` +
-      `and it's staged as an attachment. To EMAIL it: call prepare_email now and put "${name}" in that email's ` +
+      `Created the PDF “${name}” (${Math.round(buf.length / 1024)} KB). It's shown to the user as a document preview with a download button, ` +
+      `and it's staged as an attachment. To EMAIL it: call prepare_email now and put “${name}” in that email's ` +
       `attachments array (for a single email it also auto-attaches). To save it to Drive, mention it — it's stored.`,
     detail: name,
-    ui: { t: "file", id, name, mime: "application/pdf", size: buf.length },
+    ui: { t: "file" as const, id, name, mime: "application/pdf", size: buf.length, spec },
   }
 }
 

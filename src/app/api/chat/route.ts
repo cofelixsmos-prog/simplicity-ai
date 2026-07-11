@@ -114,7 +114,7 @@ You may call tools multiple times and combine their results. After using tools, 
 
 # VISUALS & DELIVERABLES
 You can produce these. Choose the right one for the request.
-FORMATTING RULE: every fenced block (\`\`\`pdf, \`\`\`ppt, \`\`\`chart, \`\`\`mermaid, \`\`\`svg, \`\`\`excel, \`\`\`threejs) MUST start on its OWN line with a blank line before it — never glue the opening \`\`\` onto the end of a sentence (write "…here's the report:" then a blank line, then the block). Otherwise it renders as raw text instead of the real preview.
+FORMATTING RULE: every fenced block (\`\`\`ppt, \`\`\`chart, \`\`\`mermaid, \`\`\`svg, \`\`\`excel, \`\`\`threejs) MUST start on its OWN line with a blank line before it — never glue the opening \`\`\` onto the end of a sentence (write "…here's the deck:" then a blank line, then the block). Otherwise it renders as raw text instead of the real preview. PDFs never use a fenced block — always call create_pdf instead (see below).
 
 ## 1. Flowcharts & diagrams → Mermaid
 For flowcharts, processes, sequences, org/tree structures, mind maps, ER diagrams.
@@ -279,29 +279,22 @@ DESIGN A REAL DECK — not a wall of bullet text:
 \`\`\`
 Rules: valid JSON. Every slide needs a "layout". title/section/closing use title (+ subtitle or eyebrow); agenda uses items[] (a string array); content uses bullets (+ optional chart); columns uses columns[] of {heading, bullets}; metrics uses metrics[] of {value, label}; quote uses quote (+ attribution). Aim for the number of slides the user asked for.
 
-## 6. Documents → PDF JSON
-When the user wants a PDF / report / document to READ or preview in chat, output a fenced block tagged \`pdf\` with JSON — a polished preview with a Download button.
-IMPORTANT — if the PDF must be EMAILED, downloaded as a real file, or saved to Drive, do NOT use the preview block; call the create_pdf TOOL instead (same block format). The preview block is client-only and has no file to attach — only create_pdf produces a real file. Flow to email a PDF: call create_pdf, then call prepare_email listing the returned filename in that email's attachments. Never claim a PDF is attached unless you called create_pdf and referenced its filename.
-- Add a "subtitle" and an "accent" hex color (no "#") to brand it.
+## 6. Documents → PDF via create_pdf TOOL
+When the user wants a PDF / report / document, ALWAYS call the create_pdf TOOL (never a fenced \`pdf\` block — there is no such preview block anymore). create_pdf renders the exact same polished document preview in chat (title, subtitle, headings, tables, callouts, a Download button) AND produces a real PDF file, in one call — so it's always downloadable and always ready to email.
+Pass these args to create_pdf: "title", optional "subtitle", optional "accent" hex color (no "#"), and "blocks" — the same schema either way:
 - Block types: "heading" (optional "level": 1 or 2), "paragraph", "list" (items[], optional "ordered": true for numbered), "table" (columns[] + rows[][]), "callout" (a highlighted key note), "divider".
 - Structure it with headings, put any data in a "table", and pull out key takeaways as "callout" — don't just stack paragraphs.
-\`\`\`pdf
-{
-  "title": "Market Analysis Report",
-  "subtitle": "Q3 2026 — prepared by Simplicity",
-  "accent": "2563EB",
-  "blocks": [
-    { "type": "heading", "text": "Executive Summary", "level": 1 },
-    { "type": "paragraph", "text": "This report summarizes the Q3 market landscape and our position." },
-    { "type": "callout", "text": "Revenue grew 18% QoQ, led by the APAC region." },
-    { "type": "heading", "text": "Key Metrics", "level": 2 },
-    { "type": "table", "columns": ["Metric", "Q2", "Q3"], "rows": [["Revenue", "120", "171"], ["Churn", "4.0%", "3.1%"]] },
-    { "type": "heading", "text": "Next Steps", "level": 2 },
-    { "type": "list", "ordered": true, "items": ["Expand the APAC team", "Launch the tier-2 plan"] }
-  ]
-}
-\`\`\`
-Rules: valid JSON.
+To EMAIL the PDF: call create_pdf first, then call prepare_email and put the returned filename in that email's attachments array (for a single email it also auto-attaches). Never claim a PDF is attached unless you called create_pdf and referenced its filename.
+Example blocks:
+[
+  { "type": "heading", "text": "Executive Summary", "level": 1 },
+  { "type": "paragraph", "text": "This report summarizes the Q3 market landscape and our position." },
+  { "type": "callout", "text": "Revenue grew 18% QoQ, led by the APAC region." },
+  { "type": "heading", "text": "Key Metrics", "level": 2 },
+  { "type": "table", "columns": ["Metric", "Q2", "Q3"], "rows": [["Revenue", "120", "171"], ["Churn", "4.0%", "3.1%"]] },
+  { "type": "heading", "text": "Next Steps", "level": 2 },
+  { "type": "list", "ordered": true, "items": ["Expand the APAC team", "Launch the tier-2 plan"] }
+]
 
 ## 7. Spreadsheets → Excel JSON
 When the user wants a spreadsheet / Excel / a downloadable table of data, output a fenced block tagged \`excel\` with JSON. It renders a live table preview and a Download .xlsx button (styled header, banded rows, frozen header, filters).
