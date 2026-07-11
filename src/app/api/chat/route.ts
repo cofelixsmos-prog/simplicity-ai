@@ -1,6 +1,6 @@
 import { getModel, DEFAULT_MODEL_ID, type ReasoningEffort } from "@/lib/models"
 import { TOOLS, TOOL_SCHEMAS, type ToolCtx, type ToolSchema, type ModelMessage } from "@/lib/agent/tools"
-import { corsHeaders, jsonResponse, preflight, clientIp, rateLimit } from "@/lib/api/http"
+import { corsHeaders, jsonResponse, preflight, clientIp, rateLimit, rateLimitKey, tieredRateLimit } from "@/lib/api/http"
 import { getCurrentUserRow } from "@/lib/auth"
 import { listMemories } from "@/lib/db/repo"
 
@@ -343,12 +343,14 @@ interface ChatMessage {
 }
 
 export async function POST(request: Request) {
-  // Per-IP rate limit — protects API quota and the instance from abuse.
-  const rl = rateLimit(`chat:${clientIp(request)}`, CHAT_RATE_LIMIT, CHAT_RATE_WINDOW)
-  if (!rl.ok) {
+  // A cheap, pre-body IP check so a completely anonymous flood (no session
+  // cookie at all) gets rejected before we even touch the DB or parse JSON.
+  // The real budget is enforced below, keyed by account once we know who it is.
+  const anon = rateLimit(`chat-anon:${clientIp(request)}`, CHAT_RATE_LIMIT * 3, CHAT_RATE_WINDOW)
+  if (!anon.ok) {
     return jsonResponse(
       { error: "Too many requests. Please slow down." },
-      { status: 429, headers: { "Retry-After": String(rl.retryAfter) } },
+      { status: 429, headers: { "Retry-After": String(anon.retryAfter) } },
       request
     )
   }
@@ -400,6 +402,30 @@ export async function POST(request: Request) {
   // full row (with the encrypted App Password) powers the IMAP-backed tools.
   const userRow = await getCurrentUserRow()
   const gmailConnected = !!userRow?.gmailAppPassword
+
+  // The real budget: keyed by account when signed in (so IP-sharing/rotation
+  // can't dodge it), by IP only for the rare unauthenticated case. Two windows —
+  // a tight burst cap plus a wider sustained cap — catch both rapid-fire spam
+  // and slow-drip abuse. Crossing the soft threshold (within the sustained
+  // window) doesn't block the request but is logged so unusual usage is visible
+  // before it ever needs the hard 429. spawn_agents can fan one request into
+  // several upstream model calls, so this bounds request rate, not raw tokens.
+  const chatKey = rateLimitKey("chat", request, userRow?.id)
+  const tier = tieredRateLimit(chatKey, {
+    burst: CHAT_RATE_LIMIT,
+    burstWindowMs: CHAT_RATE_WINDOW,
+    sustained: CHAT_RATE_LIMIT * 8,
+    sustainedWindowMs: CHAT_RATE_WINDOW * 15,
+    soft: CHAT_RATE_LIMIT * 5,
+  })
+  if (!tier.ok) {
+    return jsonResponse(
+      { error: "Too many requests. Please slow down." },
+      { status: 429, headers: { "Retry-After": String(tier.retryAfter) } },
+      request
+    )
+  }
+  if (tier.soft) console.warn(`[chat] soft rate-limit threshold crossed for ${chatKey}`)
 
   const model = getModel(modelId)
   const binding = getBinding(modelId)

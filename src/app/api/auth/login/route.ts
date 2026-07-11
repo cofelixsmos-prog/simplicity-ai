@@ -1,4 +1,4 @@
-import { jsonResponse, preflight, clientIp, rateLimit } from "@/lib/api/http"
+import { jsonResponse, preflight, clientIp, tieredRateLimit } from "@/lib/api/http"
 import { startSession, verifyPassword, MAX_PASSWORD_LEN } from "@/lib/auth"
 import { getUserByEmail } from "@/lib/db/repo"
 
@@ -10,8 +10,16 @@ export function OPTIONS(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const rl = rateLimit(`login:${clientIp(req)}`, 10, 60_000)
-  if (!rl.ok) return jsonResponse({ error: "Too many attempts. Try again shortly." }, { status: 429 }, req)
+  // Two independent limits: per-IP (stops one attacker hammering many accounts
+  // from one machine) and per-account below (stops credential stuffing spread
+  // across many IPs at one target account). Each is itself burst+sustained.
+  const rlIp = tieredRateLimit(`login:ip:${clientIp(req)}`, {
+    burst: 10,
+    burstWindowMs: 60_000,
+    sustained: 40,
+    sustainedWindowMs: 60 * 60_000,
+  })
+  if (!rlIp.ok) return jsonResponse({ error: "Too many attempts. Try again shortly." }, { status: 429 }, req)
 
   let body: { email?: string; password?: string }
   try {
@@ -29,7 +37,12 @@ export async function POST(req: Request) {
   // Per-account throttle on top of the per-IP one, so a distributed attacker
   // can't hammer a single mailbox from many IPs. Counts every attempt; a
   // legitimate user hitting it just waits out the window.
-  const rlAccount = rateLimit(`login-acct:${email}`, 15, 15 * 60_000)
+  const rlAccount = tieredRateLimit(`login-acct:${email}`, {
+    burst: 15,
+    burstWindowMs: 15 * 60_000,
+    sustained: 30,
+    sustainedWindowMs: 6 * 60 * 60_000,
+  })
   if (!rlAccount.ok) {
     return jsonResponse({ error: "Too many attempts for this account. Try again in a few minutes." }, { status: 429 }, req)
   }

@@ -4,6 +4,7 @@ import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core"
 // SQLite (libSQL) so drafts survive restarts and can be reopened/edited.
 export const drafts = sqliteTable("drafts", {
   id: text("id").primaryKey(),
+  userId: text("user_id"), // owner — nullable only for rows created before this column existed
   title: text("title").notNull(),
   content: text("content").notNull(), // markdown
   createdAt: integer("created_at").notNull(),
@@ -17,6 +18,7 @@ export type Draft = typeof drafts.$inferSelect
 // `entry` names the file the preview boots from (usually index.html).
 export const apps = sqliteTable("apps", {
   id: text("id").primaryKey(),
+  userId: text("user_id"), // owner — nullable only for rows created before this column existed
   title: text("title").notNull(),
   files: text("files").notNull(), // JSON: { name: string; content: string }[]
   entry: text("entry").notNull(),

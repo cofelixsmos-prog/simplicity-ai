@@ -66,6 +66,8 @@ export function initDb(): Promise<void> {
       `ALTER TABLE users ADD COLUMN gmail_refresh_token TEXT`,
       `ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`,
       `ALTER TABLE messages ADD COLUMN artifacts TEXT`,
+      `ALTER TABLE apps ADD COLUMN user_id TEXT`,
+      `ALTER TABLE drafts ADD COLUMN user_id TEXT`,
     ]) {
       try {
         await client.execute(sql)

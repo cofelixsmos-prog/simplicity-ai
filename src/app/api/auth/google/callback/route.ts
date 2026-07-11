@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server"
 import { cookies } from "next/headers"
+import { randomBytes } from "crypto"
 import { getCurrentUserRow } from "@/lib/auth"
 import { setUserGmailOAuth, createUser, getUserByEmail } from "@/lib/db/repo"
 import { encryptSecret } from "@/lib/crypto"
 import { googleConfig, exchangeCode, redirectUri, originOf } from "@/lib/google-oauth"
 import { hashPassword, startSession } from "@/lib/auth"
+import { clientIp, tieredRateLimit } from "@/lib/api/http"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -13,6 +15,17 @@ export const dynamic = "force-dynamic"
 // If user is logged in: connect Gmail. If not: create account and log in.
 export async function GET(req: Request) {
   const origin = originOf(req)
+
+  // Rate-limited per IP: without this, completing Google's consent screen is an
+  // unthrottled way to mint free accounts (each burns chat-API budget).
+  const rl = tieredRateLimit(`oauth-callback:ip:${clientIp(req)}`, {
+    burst: 10,
+    burstWindowMs: 60_000,
+    sustained: 30,
+    sustainedWindowMs: 60 * 60_000,
+  })
+  if (!rl.ok) return NextResponse.redirect(`${origin}/register?oauth=rate_limited`)
+
   const url = new URL(req.url)
   const code = url.searchParams.get("code")
   const state = url.searchParams.get("state")
@@ -65,9 +78,13 @@ export async function GET(req: Request) {
       let newUser = await getUserByEmail(email)
       if (!newUser) {
         const name = email.split("@")[0]
+        // This account has no real password — password-based login must never
+        // succeed for it. Math.random() is not a CSPRNG and is guessable; use
+        // a proper random value even though nothing is meant to derive it back.
+        const unusablePassword = randomBytes(32).toString("hex")
         newUser = await createUser(
           email,
-          await hashPassword(Math.random().toString()),
+          await hashPassword(unusablePassword),
           name,
           { settings: null }
         )

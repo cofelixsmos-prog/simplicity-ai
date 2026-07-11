@@ -11,7 +11,10 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypt
 const FALLBACK = "sx-dev-insecure-key-change-me"
 const SECRET = process.env.APP_ENCRYPTION_KEY
 if (!SECRET && process.env.NODE_ENV === "production") {
-  console.error("[crypto] APP_ENCRYPTION_KEY is not set — stored secrets use an insecure fallback key.")
+  // Hard-fail rather than silently encrypting with a fallback key that's
+  // published in this file's source — a missing env var must not be able to
+  // quietly downgrade every stored Gmail credential to "public key" security.
+  throw new Error("APP_ENCRYPTION_KEY is not set in production. Refusing to start with an insecure fallback key.")
 }
 
 // Fixed salt is acceptable here: the salt only needs to be stable so the same

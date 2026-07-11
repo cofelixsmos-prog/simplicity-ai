@@ -152,7 +152,7 @@ async function googleSearch(query: string): Promise<ToolResult | null> {
 }
 
 // ── create_draft / update_draft: write essays/docs to the editable canvas ────
-async function createDraft(args: Record<string, unknown>): Promise<ToolResult> {
+async function createDraft(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
   const title = (String(args.title ?? "").trim() || "Untitled draft").slice(0, 200)
   const content = String(args.content ?? "").trim()
   if (!content) return { result: "No content was provided for the draft.", detail: "empty" }
@@ -160,7 +160,7 @@ async function createDraft(args: Record<string, unknown>): Promise<ToolResult> {
   await initDb()
   const id = randomUUID()
   const now = Date.now()
-  await db.insert(drafts).values({ id, title, content, createdAt: now, updatedAt: now })
+  await db.insert(drafts).values({ id, userId: ctx?.user?.id ?? null, title, content, createdAt: now, updatedAt: now })
 
   return {
     result:
@@ -171,13 +171,14 @@ async function createDraft(args: Record<string, unknown>): Promise<ToolResult> {
   }
 }
 
-async function updateDraft(args: Record<string, unknown>): Promise<ToolResult> {
+async function updateDraft(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
   const id = String(args.id ?? "").trim()
   if (!id) return { result: "An existing draft id is required to update.", detail: "no id" }
 
   await initDb()
   const existing = (await db.select().from(drafts).where(eq(drafts.id, id)))[0]
-  if (!existing) return { result: `No draft found with id ${id}.`, detail: "not found" }
+  if (!existing || (existing.userId && existing.userId !== ctx?.user?.id))
+    return { result: `No draft found with id ${id}.`, detail: "not found" }
 
   const content = args.content !== undefined ? String(args.content) : existing.content
   const title = args.title !== undefined ? String(args.title).slice(0, 200) : existing.title
@@ -373,7 +374,7 @@ async function buildApp(args: Record<string, unknown>, ctx?: ToolCtx): Promise<T
   await initDb()
   const id = randomUUID()
   const now = Date.now()
-  await db.insert(apps).values({ id, title, files: JSON.stringify(files), entry, createdAt: now, updatedAt: now })
+  await db.insert(apps).values({ id, userId: ctx.user?.id ?? null, title, files: JSON.stringify(files), entry, createdAt: now, updatedAt: now })
 
   ctx.emit({ t: "step", id: `${sid}-run`, tool: "preview", label: "Opened live preview", status: "done", detail: "ready" })
 
@@ -402,7 +403,7 @@ async function updateApp(args: Record<string, unknown>, ctx?: ToolCtx): Promise<
 
   await initDb()
   const existing = (await db.select().from(apps).where(eq(apps.id, id)))[0]
-  if (!existing)
+  if (!existing || (existing.userId && existing.userId !== ctx.user?.id))
     return {
       result: `No app found with id "${id}" (it may be from an earlier session). Build a new one with build_app instead.`,
       detail: "not found",

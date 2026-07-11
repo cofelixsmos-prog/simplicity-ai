@@ -1,4 +1,4 @@
-import { jsonResponse, preflight, clientIp, rateLimit } from "@/lib/api/http"
+import { jsonResponse, preflight, clientIp, tieredRateLimit } from "@/lib/api/http"
 import { hashPassword, startSession, MAX_PASSWORD_LEN } from "@/lib/auth"
 import { createUser, getUserByEmail } from "@/lib/db/repo"
 import { MAX_SYSTEM_PROMPT, parseSettings, serializeSettings } from "@/lib/settings"
@@ -14,7 +14,15 @@ export function OPTIONS(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const rl = rateLimit(`register:${clientIp(req)}`, 8, 60_000)
+  // No account exists yet at this point, so this can only be keyed by IP.
+  // Tight burst window stops rapid scripted signups; a wider sustained window
+  // (lower per-window rate) catches a slow-drip bot spread out to look human.
+  const rl = tieredRateLimit(`register:ip:${clientIp(req)}`, {
+    burst: 8,
+    burstWindowMs: 60_000,
+    sustained: 20,
+    sustainedWindowMs: 60 * 60_000,
+  })
   if (!rl.ok) return jsonResponse({ error: "Too many attempts. Try again shortly." }, { status: 429 }, req)
 
   let body: {
