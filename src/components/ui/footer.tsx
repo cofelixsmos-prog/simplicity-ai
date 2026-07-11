@@ -9,18 +9,21 @@ interface FooterProps {
 
 const COLUMNS: { heading: string; links: { label: string; href: string }[] }[] = [
   {
-    heading: "Product",
+    heading: "Features",
     links: [
-      { label: "Capabilities", href: "/#capabilities" },
-      { label: "Models", href: "/#models" },
-      { label: "Chat", href: "/chat" },
+      { label: "Focus mode", href: "/features/focus-mode" },
+      { label: "Agent swarm", href: "/features/agent-swarm" },
+      { label: "Gmail integration", href: "/features/gmail-integration" },
+      { label: "Document generation", href: "/features/document-generation" },
     ],
   },
   {
-    heading: "Developers",
+    heading: "For",
     links: [
-      { label: "API", href: "/developers" },
-      { label: "Status", href: "/developers#status" },
+      { label: "Students", href: "/for/students" },
+      { label: "Writers", href: "/for/writers" },
+      { label: "Researchers", href: "/for/researchers" },
+      { label: "Developers", href: "/developers" },
     ],
   },
   {
