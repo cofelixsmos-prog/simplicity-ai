@@ -722,11 +722,11 @@ async function listArtifacts(args: Record<string, unknown>, ctx?: ToolCtx): Prom
 // ── Google Drive: search / read / save files ────────────────────────────────
 const driveReconnectMsg =
   "Drive access hasn't been granted yet (the Google connection predates Drive support). " +
-  "Tell the user to reconnect Google — call manage_gmail with action 'connect' — to grant Drive access."
+  "Tell the user to reconnect Google from Settings to grant Drive access."
 
 async function searchDrive(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
   if (!(ctx?.user?.gmailRefreshToken))
-    return { result: "Google Drive isn't connected. Ask the user to connect Google (manage_gmail, action 'connect').", detail: "not connected" }
+    return { result: "Google Drive isn't connected. Tell the user to connect Google from Settings.", detail: "not connected" }
   const { searchDrive: run, RECONNECT, kindOf } = await import("@/lib/drive")
   const query = args.query ? String(args.query).slice(0, 200) : undefined
   const limit = Math.min(Math.max(Number(args.limit) || 15, 1), 40)
@@ -767,7 +767,7 @@ async function saveToDrive(args: Record<string, unknown>, ctx?: ToolCtx): Promis
   }
 }
 
-// ── manage_gmail: connect / test / disconnect the user's Gmail from chat ─────
+// ── manage_gmail: test / disconnect the user's Gmail from chat (connecting is Settings-only) ─────
 async function manageGmail(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
   const action = String(args.action ?? "")
   const connected = !!(ctx?.user?.gmailAppPassword || ctx?.user?.gmailRefreshToken)
@@ -791,16 +791,6 @@ async function manageGmail(args: Record<string, unknown>, ctx?: ToolCtx): Promis
     }
   }
 
-  if (action === "connect") {
-    return {
-      result:
-        "Sending the user to Google's secure sign-in to connect Gmail (OAuth — they approve access on Google's " +
-        "own page; no passwords involved). Tell them they're being redirected to sign in with Google.",
-      detail: "connect",
-      ui: { t: "gmail_connect" },
-    }
-  }
-
   if (action === "disconnect") {
     return {
       result: connected
@@ -811,7 +801,7 @@ async function manageGmail(args: Record<string, unknown>, ctx?: ToolCtx): Promis
     }
   }
 
-  return { result: `Unknown Gmail action "${action}". Use connect, test, or disconnect.`, detail: "unknown" }
+  return { result: `Unknown Gmail action "${action}". Use test or disconnect.`, detail: "unknown" }
 }
 
 // ── remember: save a durable fact about the user to long-term memory ─────────
@@ -1365,20 +1355,19 @@ export const TOOLS: Record<string, AgentTool> = {
       function: {
         name: "manage_gmail",
         description:
-          "Connect, test, or disconnect the user's Gmail — right from chat. Use 'test' when they ask if email/Gmail " +
-          "is working or set up; 'connect' when they want to connect Gmail or when a send fails for lack of a " +
-          "connection (it redirects them to Google's secure sign-in — no passwords, you never handle credentials); " +
-          "'disconnect' to remove it.",
+          "Test or disconnect the user's Gmail connection — right from chat. Use 'test' when they ask if email/Gmail " +
+          "is working or set up, or after a send fails, to check the connection; 'disconnect' to remove it. " +
+          "Connecting Gmail is NOT done from chat — if it isn't connected, tell the user to connect it from Settings.",
         parameters: {
           type: "object",
           properties: {
-            action: { type: "string", enum: ["test", "connect", "disconnect"], description: "What to do." },
+            action: { type: "string", enum: ["test", "disconnect"], description: "What to do." },
           },
           required: ["action"],
         },
       },
     },
-    label: (a) => `Gmail: ${a.action === "test" ? "testing connection" : a.action === "connect" ? "connecting" : "disconnecting"}`,
+    label: (a) => `Gmail: ${a.action === "test" ? "testing connection" : "disconnecting"}`,
     run: manageGmail,
   },
   control_ui: {
