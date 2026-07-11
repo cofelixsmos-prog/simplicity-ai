@@ -6,6 +6,7 @@ import { Navbar } from "@/components/ui/navbar"
 import { StatementSection } from "@/components/ui/statement-section"
 import { CinematicStory } from "@/components/ui/cinematic-story"
 import { ModelsSection } from "@/components/ui/models-section"
+import { PartnersSection } from "@/components/ui/partners-section"
 import { CtaSection } from "@/components/ui/cta-section"
 import { Footer } from "@/components/ui/footer"
 
@@ -35,6 +36,7 @@ export default function Home() {
       <StatementSection />
       <CinematicStory />
       <ModelsSection onModelClick={handleModelClick} />
+      <PartnersSection />
       <CtaSection onCtaClick={handleEarlyAccess} />
       <Footer />
     </>
