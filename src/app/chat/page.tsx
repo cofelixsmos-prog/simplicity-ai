@@ -1732,6 +1732,7 @@ export default function ChatPage() {
           </>
         )
       })()}
+
       </div>
     </>
   )

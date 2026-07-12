@@ -1,7 +1,7 @@
 import { jsonResponse, preflight } from "@/lib/api/http"
 import { getCurrentUser } from "@/lib/auth"
 import { setUserSettings, setUserSystemPrompt, setUserName } from "@/lib/db/repo"
-import { parseSettings, serializeSettings, MAX_SYSTEM_PROMPT } from "@/lib/settings"
+import { parseSettings, serializeSettings, MAX_SYSTEM_PROMPT, BG_THEMES, type BgTheme } from "@/lib/settings"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -58,6 +58,7 @@ export async function PATCH(req: Request) {
     if (typeof patch.focusDimOpacity === "number") current.focusDimOpacity = Math.max(0, Math.min(1, patch.focusDimOpacity))
     if (typeof patch.animSpeed === "number") current.animSpeed = Math.max(0, Math.min(2, patch.animSpeed))
     if (typeof patch.focusAnimSpeed === "number") current.focusAnimSpeed = Math.max(0, Math.min(2, patch.focusAnimSpeed))
+    if (typeof patch.bgTheme === "string" && BG_THEMES.includes(patch.bgTheme as BgTheme)) current.bgTheme = patch.bgTheme as BgTheme
     await setUserSettings(user.id, serializeSettings(current))
   }
 

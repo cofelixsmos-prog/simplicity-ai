@@ -3,6 +3,34 @@
 // TEXT column on the users table (see schema) and mirrors cleanly into
 // localStorage for the client-only ambient components to read.
 
+// Background theme choices. "default" is the original monochrome shader.
+// "video" means the user uploaded a custom video (stored as an object URL / blob
+// in localStorage — never touches the server).
+export type BgTheme =
+  | "default"
+  | "aurora"
+  | "ocean"
+  | "sunset"
+  | "lavender"
+  | "emerald"
+  | "midnight"
+  | "macOS"
+  | "candy"
+  | "neon"
+  | "rose"
+  | "golden"
+  | "arctic"
+  | "metaballs"
+  | "neuro"
+  | "smoke"
+  | "godrays"
+  | "warp"
+  | "swirl"
+  | "grain"
+  | "dots"
+  | "plain-black"
+  | "video"
+
 export interface UserSettings {
   autoNight: boolean
   autoMorning: boolean
@@ -16,7 +44,16 @@ export interface UserSettings {
   animSpeed: number
   // Focus mode animation speed multiplier.
   focusAnimSpeed: number
+  // Background theme.
+  bgTheme: BgTheme
 }
+
+export const BG_THEMES: BgTheme[] = [
+  "default", "aurora", "ocean", "sunset", "lavender", "emerald", "midnight",
+  "macOS", "candy", "neon", "rose", "golden", "arctic",
+  "metaballs", "neuro", "smoke", "godrays", "warp", "swirl", "grain", "dots",
+  "plain-black", "video",
+]
 
 export const DEFAULT_SETTINGS: UserSettings = {
   autoNight: true,
@@ -26,6 +63,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   focusDimOpacity: 0.62,
   animSpeed: 1,
   focusAnimSpeed: 0.2,
+  bgTheme: "default",
 }
 
 // Parse the stored JSON string defensively — anything missing/invalid falls
@@ -42,6 +80,7 @@ export function parseSettings(raw: string | null | undefined): UserSettings {
       focusDimOpacity: typeof o.focusDimOpacity === "number" ? o.focusDimOpacity : DEFAULT_SETTINGS.focusDimOpacity,
       animSpeed: typeof o.animSpeed === "number" ? o.animSpeed : DEFAULT_SETTINGS.animSpeed,
       focusAnimSpeed: typeof o.focusAnimSpeed === "number" ? o.focusAnimSpeed : DEFAULT_SETTINGS.focusAnimSpeed,
+      bgTheme: typeof o.bgTheme === "string" && BG_THEMES.includes(o.bgTheme as BgTheme) ? o.bgTheme as BgTheme : DEFAULT_SETTINGS.bgTheme,
     }
   } catch {
     return { ...DEFAULT_SETTINGS }
@@ -58,6 +97,7 @@ export function serializeSettings(s: UserSettings): string {
 // once auth resolves.
 export const LS_AUTO_NIGHT = "sx-auto-night"
 export const LS_AUTO_MORNING = "sx-auto-morning"
+export const LS_BG_THEME = "sx-bg-theme"
 
 // Broadcast so already-mounted ambient components (which read the mirror on
 // mount, before auth resolves) can update live without a reload.
@@ -67,6 +107,7 @@ export function mirrorSettingsToLocal(s: UserSettings): void {
   try {
     localStorage.setItem(LS_AUTO_NIGHT, s.autoNight ? "1" : "0")
     localStorage.setItem(LS_AUTO_MORNING, s.autoMorning ? "1" : "0")
+    localStorage.setItem(LS_BG_THEME, s.bgTheme)
     window.dispatchEvent(new CustomEvent(SETTINGS_EVENT, { detail: s }))
   } catch {
     /* storage unavailable */

@@ -1,11 +1,12 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ArrowLeft, Check, Loader2, Mail, HardDrive, Shield, Eye, Sparkles, User, PenLine } from "lucide-react"
+import { ArrowLeft, Check, Loader2, Mail, HardDrive, Shield, Eye, Sparkles, User, PenLine, Palette, Upload } from "lucide-react"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
 import { toast } from "@/components/ui/toast"
-import { MAX_SYSTEM_PROMPT, type UserSettings, DEFAULT_SETTINGS } from "@/lib/settings"
+import { MAX_SYSTEM_PROMPT, type UserSettings, type BgTheme, BG_THEMES, DEFAULT_SETTINGS, LS_BG_THEME, SETTINGS_EVENT, mirrorSettingsToLocal } from "@/lib/settings"
+import { saveBgVideo } from "@/lib/bg-video-store"
 
 interface UserData {
   id: string
@@ -305,6 +306,171 @@ export default function SettingsPage() {
               >
                 {saving ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
                 Save
+              </button>
+            </div>
+          </Section>
+
+          {/* Background Theme */}
+          <Section title="Background" icon={<Palette className="size-4" />}>
+            <p className="mb-5 text-xs text-white/45">
+              Choose an animated background style or upload your own video.
+            </p>
+
+            <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wider text-white/30">Gradient</p>
+            <div className="mb-5 grid grid-cols-3 gap-2.5 sm:grid-cols-4">
+              {BG_THEMES.filter((t) => !["metaballs","neuro","smoke","godrays","warp","swirl","grain","dots","video"].includes(t)).map((theme) => {
+                const previewColors: Record<string, string[]> = {
+                  default:  ["#000", "#3a3a3a", "#1f1f1f"],
+                  aurora:   ["#041220", "#1a5c6a", "#2d8a7a"],
+                  ocean:    ["#020b18", "#0c3b6e", "#1565a0"],
+                  sunset:   ["#1a0800", "#7a2e10", "#b84a20"],
+                  lavender: ["#0d0818", "#2f1f5e", "#4a3080"],
+                  emerald:  ["#001a0f", "#006e3d", "#00a05a"],
+                  midnight: ["#020208", "#0c0c28", "#14143f"],
+                  macOS:    ["#f04e7b", "#a855f7", "#3b82f6"],
+                  candy:    ["#ff6b9d", "#c084fc", "#67e8f9"],
+                  neon:     ["#00ff88", "#8b5cf6", "#ff0080"],
+                  rose:     ["#4a1028", "#b83060", "#d44a78"],
+                  golden:   ["#1a1000", "#7a5010", "#b88030"],
+                  arctic:   ["#e0f0ff", "#80b8e3", "#5090c0"],
+                  metaballs: ["#0a0020", "#7c3aed", "#ec4899"],
+                  neuro:    ["#000", "#1a8a5a", "#4ade80"],
+                  smoke:    ["#0a0010", "#7c3aed", "#e879f9"],
+                  godrays:  ["#000", "#f59e0b", "#78350f"],
+                  warp:     ["#1e1b4b", "#4338ca", "#a78bfa"],
+                  "plain-black": ["#000", "#000", "#000"],
+                }
+                const labels: Record<string, string> = {
+                  default: "Default", macOS: "macOS", "plain-black": "Plain Black",
+                  godrays: "God Rays", neuro: "Neural",
+                }
+                const c = previewColors[theme] || ["#000", "#222", "#111"]
+                const label = labels[theme] || theme.charAt(0).toUpperCase() + theme.slice(1)
+                return (
+                  <button
+                    key={theme}
+                    onClick={() => {
+                      const next = { ...settings, bgTheme: theme as BgTheme }
+                      setSettings(next)
+                      save({ settings: { bgTheme: theme } })
+                      mirrorSettingsToLocal(next)
+                    }}
+                    className={`group relative flex flex-col items-center gap-2 rounded-xl border p-3 transition-all ${
+                      settings.bgTheme === theme
+                        ? "border-white/40 bg-white/10"
+                        : "border-white/8 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.05]"
+                    }`}
+                  >
+                    <div
+                      className="h-12 w-full rounded-lg"
+                      style={{ background: `linear-gradient(135deg, ${c[0]}, ${c[1]}, ${c[2]})` }}
+                    />
+                    <span className="text-[11px] font-medium text-white/60 group-hover:text-white/80">
+                      {label}
+                    </span>
+                    {settings.bgTheme === theme && (
+                      <div className="absolute right-1.5 top-1.5 flex size-4 items-center justify-center rounded-full bg-white">
+                        <Check className="size-2.5 text-black" />
+                      </div>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+
+            <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wider text-white/30">Effects</p>
+            <div className="mb-5 grid grid-cols-3 gap-2.5 sm:grid-cols-4">
+              {(["metaballs","neuro","smoke","godrays","warp","swirl","grain","dots"] as BgTheme[]).map((theme) => {
+                const previewEfx: Record<string, string[]> = {
+                  metaballs: ["#000", "#6e33cc", "#ff5500"],
+                  neuro:     ["#000", "#47a6ff", "#fff"],
+                  smoke:     ["#000", "#4540a4", "#1fe8ff"],
+                  godrays:   ["#000", "#6200ff", "#33fff5"],
+                  warp:      ["#121212", "#9470ff", "#8838ff"],
+                  swirl:     ["#330000", "#ff8a8a", "#660000"],
+                  grain:     ["#000", "#7300ff", "#00bfff"],
+                  dots:      ["#000", "#ffc96b", "#ff2f00"],
+                }
+                const efxLabels: Record<string, string> = {
+                  metaballs: "Metaballs", neuro: "Neural", smoke: "Smoke Ring",
+                  godrays: "God Rays", warp: "Warp", swirl: "Swirl",
+                  grain: "Grain", dots: "Dot Orbit",
+                }
+                const c = previewEfx[theme] || ["#000","#222","#111"]
+                return (
+                  <button
+                    key={theme}
+                    onClick={() => {
+                      const next = { ...settings, bgTheme: theme }
+                      setSettings(next)
+                      save({ settings: { bgTheme: theme } })
+                      mirrorSettingsToLocal(next)
+                    }}
+                    className={`group relative flex flex-col items-center gap-2 rounded-xl border p-3 transition-all ${
+                      settings.bgTheme === theme
+                        ? "border-white/40 bg-white/10"
+                        : "border-white/8 bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.05]"
+                    }`}
+                  >
+                    <div
+                      className="h-12 w-full rounded-lg"
+                      style={{ background: `radial-gradient(circle at 30% 40%, ${c[1]}, ${c[0]}), radial-gradient(circle at 70% 60%, ${c[2]}, transparent)` }}
+                    />
+                    <span className="text-[11px] font-medium text-white/60 group-hover:text-white/80">
+                      {efxLabels[theme]}
+                    </span>
+                    {settings.bgTheme === theme && (
+                      <div className="absolute right-1.5 top-1.5 flex size-4 items-center justify-center rounded-full bg-white">
+                        <Check className="size-2.5 text-black" />
+                      </div>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+
+            <p className="mb-2.5 text-[11px] font-medium uppercase tracking-wider text-white/30">Custom</p>
+            <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4">
+              <button
+                onClick={() => {
+                  const input = document.createElement("input")
+                  input.type = "file"
+                  input.accept = "video/*"
+                  input.onchange = async () => {
+                    const file = input.files?.[0]
+                    if (!file) return
+                    if (file.size > 50 * 1024 * 1024) {
+                      toast("Video must be under 50 MB", "error")
+                      return
+                    }
+                    try {
+                      await saveBgVideo(file)
+                    } catch {
+                      toast("Couldn't save video", "error")
+                      return
+                    }
+                    const next = { ...settings, bgTheme: "video" as BgTheme }
+                    setSettings(next)
+                    save({ settings: { bgTheme: "video" } })
+                    mirrorSettingsToLocal(next)
+                  }
+                  input.click()
+                }}
+                className={`group relative flex flex-col items-center justify-center gap-2 rounded-xl border p-3 transition-all ${
+                  settings.bgTheme === "video"
+                    ? "border-white/40 bg-white/10"
+                    : "border-white/8 border-dashed bg-white/[0.02] hover:border-white/20 hover:bg-white/[0.05]"
+                }`}
+              >
+                <Upload className="size-5 text-white/40 group-hover:text-white/70" />
+                <span className="text-[11px] font-medium text-white/60 group-hover:text-white/80">
+                  Upload Video
+                </span>
+                {settings.bgTheme === "video" && (
+                  <div className="absolute right-1.5 top-1.5 flex size-4 items-center justify-center rounded-full bg-white">
+                    <Check className="size-2.5 text-black" />
+                  </div>
+                )}
               </button>
             </div>
           </Section>
