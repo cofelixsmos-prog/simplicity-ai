@@ -4,6 +4,7 @@ import "./globals.css";
 import { GlassPointer } from "@/components/ui/glass-pointer";
 import { Toaster } from "@/components/ui/toast";
 import { NightMode } from "@/components/ui/night-mode";
+import { SmoothScroll } from "@/components/ui/smooth-scroll";
 
 const poppins = Poppins({
   variable: "--font-sans",
@@ -18,11 +19,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Simplicity R1 — AI Chat Assistant, Made in India",
+    default: "Simplicity: R1 — AI Chat Assistant, Made in India",
     template: "%s · Simplicity",
   },
   description:
-    "Simplicity R1 — frontier reasoning refined down to what actually matters. Focus mode, real deliverables, memory, and an agent swarm in one calm assistant. Made in India, made for India.",
+    "Simplicity: R1 — frontier reasoning refined down to what actually matters. Focus mode, real deliverables, memory, and an agent swarm in one calm assistant. Made in India, made for India.",
   applicationName: "Simplicity",
   metadataBase: new URL("https://simplicity-india.com"),
   keywords: [
@@ -50,7 +51,7 @@ export const metadata: Metadata = {
     },
   },
   openGraph: {
-    title: "Simplicity R1 — AI Chat Assistant, Made in India",
+    title: "Simplicity: R1 — AI Chat Assistant, Made in India",
     description:
       "Fast, focused frontier reasoning. Made in India, made for India.",
     siteName: "Simplicity",
@@ -60,7 +61,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Simplicity R1 — AI Chat Assistant, Made in India",
+    title: "Simplicity: R1 — AI Chat Assistant, Made in India",
     description: "Fast, focused frontier reasoning. Made in India, made for India.",
   },
 };
@@ -77,7 +78,7 @@ const JSON_LD = {
   operatingSystem: "Web",
   url: "https://simplicity-india.com",
   description:
-    "Simplicity R1 — frontier reasoning refined down to what actually matters. Focus mode, real deliverables, memory, and an agent swarm in one calm assistant.",
+    "Simplicity: R1 — frontier reasoning refined down to what actually matters. Focus mode, real deliverables, memory, and an agent swarm in one calm assistant.",
   offers: {
     "@type": "Offer",
     price: "0",
@@ -106,6 +107,7 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
         />
         <GlassPointer />
+        <SmoothScroll />
         {children}
         <Toaster />
         <NightMode />

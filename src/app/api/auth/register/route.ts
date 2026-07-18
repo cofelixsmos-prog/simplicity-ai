@@ -14,6 +14,7 @@ export function OPTIONS(req: Request) {
 }
 
 export async function POST(req: Request) {
+  try {
   // No account exists yet at this point, so this can only be keyed by IP.
   // Tight burst window stops rapid scripted signups; a wider sustained window
   // (lower per-window rate) catches a slow-drip bot spread out to look human.
@@ -68,4 +69,8 @@ export async function POST(req: Request) {
   })
   await startSession(user.id)
   return jsonResponse({ user: { id: user.id, email: user.email, name: user.name } }, { status: 201 }, req)
+  } catch (err) {
+    console.error("[REGISTER ERROR]", err)
+    return jsonResponse({ error: "Something went wrong." }, { status: 500 }, req)
+  }
 }

@@ -1,7 +1,11 @@
 "use client"
 
+import { useEffect, useRef } from "react"
 import Link from "next/link"
-import { Reveal } from "@/components/ui/reveal"
+import gsap from "gsap"
+import { ScrollTrigger } from "gsap/ScrollTrigger"
+
+gsap.registerPlugin(ScrollTrigger)
 
 interface FooterProps {
   brand?: string
@@ -38,10 +42,56 @@ const COLUMNS: { heading: string; links: { label: string; href: string }[] }[] =
 ]
 
 export function Footer({ brand = "Simplicity" }: FooterProps) {
+  const footerRef = useRef<HTMLElement>(null)
+  const gridRef = useRef<HTMLDivElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const footer = footerRef.current
+    const grid = gridRef.current
+    const bottom = bottomRef.current
+    if (!footer || !grid || !bottom) return
+
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)")
+    if (mq.matches) return
+
+    const ctx = gsap.context(() => {
+      // each column slides up from below
+      gsap.from(grid.children, {
+        y: 50,
+        opacity: 0,
+        stagger: 0.1,
+        duration: 0.7,
+        ease: "power3.out",
+        scrollTrigger: {
+          trigger: grid,
+          start: "top 90%",
+          once: true,
+        },
+      })
+
+      // bottom bar slides up
+      gsap.from(bottom, {
+        y: 30,
+        opacity: 0,
+        duration: 0.6,
+        delay: 0.3,
+        ease: "power2.out",
+        scrollTrigger: {
+          trigger: bottom,
+          start: "top 95%",
+          once: true,
+        },
+      })
+    }, footer)
+
+    return () => ctx.revert()
+  }, [])
+
   return (
-    <footer id="company" className="relative z-10 w-full border-t border-border bg-background">
+    <footer ref={footerRef} id="company" className="relative z-10 w-full border-t border-border bg-background">
       <div className="mx-auto max-w-6xl px-6 py-16">
-        <Reveal className="grid gap-12 md:grid-cols-[1.4fr_repeat(3,1fr)]">
+        <div ref={gridRef} className="grid gap-12 md:grid-cols-[1.4fr_repeat(3,1fr)]">
           {/* brand block */}
           <div>
             <Link href="/" className="flex items-center gap-2.5 text-[16px] font-semibold tracking-tight text-foreground">
@@ -68,14 +118,14 @@ export function Footer({ brand = "Simplicity" }: FooterProps) {
               </ul>
             </nav>
           ))}
-        </Reveal>
+        </div>
 
-        <Reveal delay={120} className="mt-14 flex flex-col items-center justify-between gap-4 border-t border-white/[0.07] pt-8 sm:flex-row">
-          <p className="text-xs text-white/35">© {new Date().getFullYear()} {brand}. All rights reserved.</p>
+        <div ref={bottomRef} className="mt-14 flex flex-col items-center justify-between gap-4 border-t border-white/[0.07] pt-8 sm:flex-row">
+          <p className="text-xs text-white/35">&copy; {new Date().getFullYear()} {brand}. All rights reserved.</p>
           <p className="flex items-center gap-1.5 text-xs text-white/35">
-            Made in India <span aria-hidden>🇮🇳</span>
+            Made in India <span aria-hidden>&#127470;&#127475;</span>
           </p>
-        </Reveal>
+        </div>
       </div>
     </footer>
   )

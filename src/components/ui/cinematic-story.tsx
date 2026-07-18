@@ -1,311 +1,346 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
-import { Brain, Search, Mail, FileText } from "lucide-react"
-import { Reveal } from "@/components/ui/reveal"
+import { useEffect, useRef } from "react"
+import { Brain, Search, Mail, Zap, FileText, Users, Eye, Sparkles } from "lucide-react"
+import gsap from "gsap"
+import { ScrollTrigger } from "gsap/ScrollTrigger"
 
-// ── Scroll-driven storytelling (Apple product-page style) ────────────────────
-// Each act is a tall wrapper with a sticky full-screen stage inside; the stage's
-// animation is driven directly by how far the wrapper has been scrolled, so the
-// product assembles under your thumb instead of on a timer.
+gsap.registerPlugin(ScrollTrigger)
 
-// 0..1 progress through a wrapper element (rAF-throttled).
-function useScrollProgress(ref: React.RefObject<HTMLDivElement | null>, reduced: boolean): number {
-  const [p, setP] = useState(0)
-  useEffect(() => {
-    if (reduced) return
-    let raf = 0
-    const onScroll = () => {
-      cancelAnimationFrame(raf)
-      raf = requestAnimationFrame(() => {
-        const el = ref.current
-        if (!el) return
-        const r = el.getBoundingClientRect()
-        const total = r.height - window.innerHeight
-        const scrolled = Math.min(Math.max(-r.top, 0), total)
-        setP(total > 0 ? scrolled / total : 0)
-      })
-    }
-    onScroll()
-    window.addEventListener("scroll", onScroll, { passive: true })
-    window.addEventListener("resize", onScroll)
-    return () => {
-      window.removeEventListener("scroll", onScroll)
-      window.removeEventListener("resize", onScroll)
-      cancelAnimationFrame(raf)
-    }
-  }, [ref, reduced])
-  return reduced ? 0.7 : p
+/*
+  ── Capabilities section ────────────────────────────────────────────────
+  Replaces the old scroll-driven "acts". This is a series of feature
+  blocks — each one a full-width row with a big visual on one side and
+  text on the other, alternating left/right. Between them, bold flat-color
+  shapes float and parallax.
+*/
+
+interface Feature {
+  tag: string
+  title: string
+  body: string
+  icon: React.ElementType
+  visual: "focus" | "build" | "swarm"
 }
 
-function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false)
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)")
-    setReduced(mq.matches)
-    const on = (e: MediaQueryListEvent) => setReduced(e.matches)
-    mq.addEventListener("change", on)
-    return () => mq.removeEventListener("change", on)
-  }, [])
-  return reduced
-}
+const FEATURES: Feature[] = [
+  {
+    tag: "Focus",
+    title: "Distractions disappear.",
+    body: "One tap and everything fades except the line you're reading. Light, Deep, and Study modes reshape how Simplicity talks to you — shorter, sharper, on-task.",
+    icon: Eye,
+    visual: "focus",
+  },
+  {
+    tag: "Deliverables",
+    title: "It ships real files.",
+    body: "PDFs, slide decks, charts, spreadsheets — built inside the conversation and ready to download or email. Not lorem ipsum. Real, polished output.",
+    icon: FileText,
+    visual: "build",
+  },
+  {
+    tag: "Agents",
+    title: "One request, four workers.",
+    body: "Simplicity splits complex tasks across parallel agents — research, write, design, build — then stitches the results into one clean deliverable.",
+    icon: Users,
+    visual: "swarm",
+  },
+]
 
-// Map progress p into [a,b] → 0..1, clamped.
-const seg = (p: number, a: number, b: number) => Math.min(1, Math.max(0, (p - a) / (b - a)))
+// ── Visual panels ──────────────────────────────────────────────────────────
 
-// Shared act scaffolding: sticky stage with an eyebrow + giant headline.
-function Act({
-  height = "260vh",
-  eyebrow,
-  headline,
-  p,
-  children,
-  wrapRef,
-}: {
-  height?: string
-  eyebrow: string
-  headline: string
-  p: number
-  children: React.ReactNode
-  wrapRef: React.RefObject<HTMLDivElement | null>
-}) {
-  const headIn = seg(p, 0.02, 0.16)
-  const actOut = 1 - seg(p, 0.92, 1)
+function FocusVisual() {
   return (
-    <div ref={wrapRef} className="relative" style={{ height }}>
-      <div className="sticky top-0 flex h-screen flex-col items-center justify-center overflow-hidden px-6">
-        <div style={{ opacity: actOut }} className="flex w-full flex-col items-center">
-          <p
-            className="mb-3 text-xs font-medium uppercase tracking-[0.26em] text-white/35"
-            style={{ opacity: headIn, transform: `translateY(${(1 - headIn) * 14}px)` }}
-          >
-            {eyebrow}
-          </p>
-          <h2
-            className="mb-12 text-center text-5xl font-semibold tracking-tight text-foreground sm:mb-16 sm:text-7xl"
-            style={{ opacity: headIn, transform: `translateY(${(1 - headIn) * 22}px)` }}
-          >
-            {headline}
-          </h2>
-          {children}
+    <div className="relative w-full max-w-sm">
+      <div className="rounded-2xl border border-white/10 bg-[#111215] p-6">
+        <div className="space-y-3">
+          {[88, 100, 75, 100, 60].map((w, i) => (
+            <div
+              key={i}
+              className="h-2 rounded-full"
+              style={{
+                width: `${w}%`,
+                background: i === 2 ? "#fff" : "rgba(255,255,255,0.1)",
+              }}
+            />
+          ))}
+        </div>
+        {/* veil */}
+        <div className="pointer-events-none absolute inset-0 rounded-2xl" style={{ background: "linear-gradient(180deg, rgba(17,18,21,0.95) 0%, rgba(17,18,21,0.95) 32%, transparent 44%, transparent 64%, rgba(17,18,21,0.95) 76%, rgba(17,18,21,0.95) 100%)" }} />
+      </div>
+      {/* mode bar */}
+      <div className="absolute -top-4 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/10 bg-[#111215] p-0.5 pr-3">
+        {["Light", "Deep", "Study"].map((m, i) => (
+          <span key={m} className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${i === 1 ? "bg-white text-black" : "text-white/40"}`}>{m}</span>
+        ))}
+        <span className="ml-1 font-mono text-[10px] tabular-nums text-white/40">19:48</span>
+      </div>
+    </div>
+  )
+}
+
+function BuildVisual() {
+  const bars = [35, 65, 28, 82, 50, 70, 42]
+  return (
+    <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#111215]">
+      <div className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-2.5">
+        <div className="flex gap-1">
+          <span className="size-2 rounded-full bg-[#ff5f57]" />
+          <span className="size-2 rounded-full bg-[#febc2e]" />
+          <span className="size-2 rounded-full bg-[#28c840]" />
+        </div>
+        <span className="ml-1 text-[10px] font-medium text-white/30">report.pdf</span>
+      </div>
+      <div className="p-5">
+        <div className="space-y-2">
+          <div className="h-3 w-3/5 rounded bg-white/25" />
+          <div className="h-1.5 w-2/5 rounded bg-white/10" />
+        </div>
+        <div className="mt-4 space-y-1.5">
+          <div className="h-1.5 w-full rounded bg-white/[0.07]" />
+          <div className="h-1.5 w-11/12 rounded bg-white/[0.07]" />
+          <div className="h-1.5 w-4/5 rounded bg-white/[0.07]" />
+        </div>
+        <div className="mt-5 flex h-20 items-end gap-1.5">
+          {bars.map((h, i) => (
+            <div key={i} className="flex-1 rounded-sm bg-white/20" style={{ height: `${h}%` }} />
+          ))}
         </div>
       </div>
     </div>
   )
 }
 
-// ── Act 1: It focuses — the world dims around your work ─────────────────────
-function ActFocus({ reduced }: { reduced: boolean }) {
-  const ref = useRef<HTMLDivElement | null>(null)
-  const p = useScrollProgress(ref, reduced)
-  const dim = seg(p, 0.2, 0.55) // the world recedes
-  const pills = seg(p, 0.45, 0.65) // controls arrive
-  const secs = 1500 - Math.round(seg(p, 0.2, 0.9) * 312) // 25:00 → 19:48
-  const mm = Math.floor(secs / 60)
-  const ss = String(secs % 60).padStart(2, "0")
-
-  return (
-    <Act wrapRef={ref} p={p} eyebrow="01 · Focus mode" headline="It focuses.">
-      <div className="relative w-full max-w-xl">
-        {/* the page you're reading */}
-        <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-[#0c0d11] p-7 sm:p-9">
-          <div className="space-y-3.5">
-            {[0.92, 1, 0.8, 1, 0.66].map((w, i) => (
-              <div
-                key={i}
-                className="h-2.5 rounded-full"
-                style={{
-                  width: `${w * 100}%`,
-                  background: i === 2 ? `rgba(255,255,255,${0.25 + dim * 0.5})` : `rgba(255,255,255,${0.16 - dim * 0.1})`,
-                }}
-              />
-            ))}
-          </div>
-          {/* dimming veil with a clear band around the focused line */}
-          <div
-            className="pointer-events-none absolute inset-0"
-            style={{
-              opacity: dim * 0.85,
-              background:
-                "linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.85) 38%, transparent 47%, transparent 60%, rgba(0,0,0,0.85) 70%, rgba(0,0,0,0.85) 100%)",
-            }}
-          />
-        </div>
-
-        {/* focus controls slide in */}
-        <div
-          className="absolute -top-5 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/12 bg-[#101217]/90 p-1 pr-3.5 shadow-2xl backdrop-blur-md"
-          style={{ opacity: pills, transform: `translate(-50%, ${(1 - pills) * 16}px)` }}
-        >
-          {["Light", "Deep", "Study"].map((l, i) => (
-            <span
-              key={l}
-              className={`rounded-full px-3 py-1 text-[11px] font-medium ${
-                i === 1 ? "bg-white text-black" : "text-white/45"
-              }`}
-            >
-              {l}
-            </span>
-          ))}
-          <span className="ml-1.5 font-mono text-[11px] tabular-nums text-white/55">
-            {mm}:{ss}
-          </span>
-        </div>
-      </div>
-    </Act>
-  )
-}
-
-// ── Act 2: It builds — a report assembles line by line ──────────────────────
-function ActBuild({ reduced }: { reduced: boolean }) {
-  const ref = useRef<HTMLDivElement | null>(null)
-  const p = useScrollProgress(ref, reduced)
-  const card = seg(p, 0.12, 0.3)
-  const bars = seg(p, 0.55, 0.8)
-  const lines = [0, 1, 2, 3, 4].map((i) => seg(p, 0.28 + i * 0.06, 0.4 + i * 0.06))
-
-  return (
-    <Act wrapRef={ref} p={p} eyebrow="02 · Deliverables" headline="It builds.">
-      <div
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-white/12 bg-[#0e1015] shadow-[0_50px_120px_-30px_rgba(0,0,0,0.9)]"
-        style={{ opacity: card, transform: `translateY(${(1 - card) * 40}px) scale(${0.94 + card * 0.06})` }}
-      >
-        <div className="flex items-center gap-2 border-b border-white/[0.07] px-5 py-3">
-          <FileText className="size-3.5 text-white/50" />
-          <span className="text-[11px] font-medium uppercase tracking-wider text-white/45">physics-report.pdf</span>
-          <span className="ml-auto font-mono text-[10px] tabular-nums text-white/30">{Math.round(seg(p, 0.25, 0.85) * 100)}%</span>
-        </div>
-        <div className="px-6 py-6">
-          <div className="h-4 rounded bg-white/30" style={{ width: `${lines[0] * 70}%` }} />
-          <div className="mt-2 h-2 rounded bg-white/[0.12]" style={{ width: `${lines[0] * 42}%` }} />
-          <div className="mt-5 space-y-2">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-2 rounded bg-white/[0.09]" style={{ width: `${lines[i] * (i === 3 ? 74 : 96)}%` }} />
-            ))}
-          </div>
-          {/* a chart grows in */}
-          <div className="mt-6 flex h-24 items-end gap-2.5">
-            {[45, 72, 34, 88, 58, 76].map((h, i) => (
-              <div key={i} className="flex-1 rounded-t bg-white/25" style={{ height: `${h * bars}%` }} />
-            ))}
-          </div>
-          <div className="mt-4 h-2 rounded bg-white/[0.09]" style={{ width: `${lines[4] * 58}%` }} />
-        </div>
-      </div>
-    </Act>
-  )
-}
-
-// ── Act 3: It multiplies — agents fan out and work in parallel ──────────────
-function ActSwarm({ reduced }: { reduced: boolean }) {
-  const ref = useRef<HTMLDivElement | null>(null)
-  const p = useScrollProgress(ref, reduced)
-  const fan = seg(p, 0.18, 0.5)
-  const work = seg(p, 0.5, 0.9)
-  const agents = [
-    { label: "research", x: -132, y: -78 },
-    { label: "design", x: 138, y: -64 },
-    { label: "write", x: -120, y: 84 },
-    { label: "build", x: 128, y: 92 },
+function SwarmVisual() {
+  const nodes = [
+    { label: "research", x: "-70px", y: "-50px", color: "#60a5fa" },
+    { label: "design", x: "70px", y: "-40px", color: "#f472b6" },
+    { label: "write", x: "-65px", y: "50px", color: "#34d399" },
+    { label: "build", x: "65px", y: "55px", color: "#fbbf24" },
   ]
-
   return (
-    <Act wrapRef={ref} p={p} eyebrow="03 · Agent swarm" headline="It multiplies.">
-      <div className="relative h-64 w-full max-w-lg sm:h-72">
-        {/* connection lines draw as agents fan out */}
-        <svg className="absolute inset-0 size-full" viewBox="-200 -140 400 280" aria-hidden>
-          {agents.map((a) => (
-            <line
-              key={a.label}
-              x1="0"
-              y1="0"
-              x2={a.x * fan}
-              y2={a.y * fan}
-              stroke="rgba(255,255,255,0.14)"
-              strokeDasharray="3 5"
-            />
-          ))}
-        </svg>
-
-        {/* orchestrator */}
-        <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
-          <div className="flex size-14 items-center justify-center rounded-2xl border border-white/20 bg-[#15171d] shadow-2xl">
-            <svg viewBox="0 0 100 100" className="size-7">
-              <path
-                d="M70,32 C70,21 56,17 45,21 C33,25 31,37 43,43 C55,49 70,51 69,63 C68,76 52,81 39,76 C32,74 29,69 28,63"
-                fill="none" stroke="white" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round"
-              />
-            </svg>
-          </div>
-        </div>
-
-        {/* agents fly outward from the center */}
-        {agents.map((a, i) => (
-          <div
-            key={a.label}
-            className="absolute left-1/2 top-1/2 z-10"
-            style={{
-              transform: `translate(calc(-50% + ${a.x * fan}px), calc(-50% + ${a.y * fan}px))`,
-              opacity: Math.max(fan, 0.001),
-            }}
-          >
-            <div className="flex items-center gap-2 rounded-full border border-white/12 bg-[#101217] py-1.5 pl-2 pr-3.5 shadow-xl">
-              <span
-                className="size-2 rounded-full"
-                style={{ background: work > (i + 1) / 5 ? "rgb(110 231 183 / 0.9)" : "rgba(255,255,255,0.75)" }}
-              />
-              <span className="text-[11px] font-medium text-white/70">{a.label}</span>
-            </div>
-          </div>
+    <div className="relative flex h-56 w-full max-w-sm items-center justify-center">
+      {/* lines */}
+      <svg className="absolute inset-0 size-full" viewBox="-140 -100 280 200" aria-hidden>
+        {nodes.map((n) => (
+          <line key={n.label} x1="0" y1="0" x2={parseInt(n.x)} y2={parseInt(n.y)} stroke="rgba(255,255,255,0.08)" strokeWidth="1" />
         ))}
-
-        {/* progress */}
-        <div className="absolute inset-x-8 -bottom-10">
-          <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-white/35">
-            <span>4 agents · parallel</span>
-            <span className="tabular-nums">{Math.min(4, Math.floor(work * 5))}/4 done</span>
-          </div>
-          <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.07]">
-            <div className="h-full rounded-full bg-white/40" style={{ width: `${work * 100}%` }} />
+      </svg>
+      {/* hub */}
+      <div className="relative z-10 flex size-12 items-center justify-center rounded-xl border border-white/15 bg-[#111215]">
+        <Zap className="size-5 text-white" />
+      </div>
+      {/* agents */}
+      {nodes.map((n) => (
+        <div key={n.label} className="absolute left-1/2 top-1/2 z-10" style={{ transform: `translate(calc(-50% + ${n.x}), calc(-50% + ${n.y}))` }}>
+          <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-[#111215] py-1 pl-2 pr-2.5">
+            <span className="size-1.5 rounded-full" style={{ background: n.color }} />
+            <span className="text-[10px] font-medium text-white/60">{n.label}</span>
           </div>
         </div>
-      </div>
-    </Act>
+      ))}
+    </div>
   )
 }
+
+const VISUALS = { focus: FocusVisual, build: BuildVisual, swarm: SwarmVisual }
+
+// ── Floating shapes (flat solid colors, big, few) ──────────────────────────
+
+function Shapes() {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+
+    const ctx = gsap.context(() => {
+      // each shape parallaxes at its own speed
+      el.querySelectorAll<HTMLElement>("[data-speed]").forEach((shape) => {
+        const speed = parseFloat(shape.dataset.speed ?? "1")
+        gsap.fromTo(shape,
+          { y: 80 * speed },
+          { y: -80 * speed, ease: "none", scrollTrigger: { trigger: el, start: "top bottom", end: "bottom top", scrub: 1.5 } }
+        )
+      })
+
+      // slow spins
+      el.querySelectorAll<HTMLElement>("[data-spin]").forEach((shape) => {
+        const dur = parseFloat(shape.dataset.spin ?? "20")
+        gsap.to(shape, { rotation: 360, duration: dur, repeat: -1, ease: "none" })
+      })
+    }, el)
+
+    return () => ctx.revert()
+  }, [])
+
+  return (
+    <div ref={ref} className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+      {/* circle — top left */}
+      <div data-speed="1.2" data-spin="25" className="absolute left-[7%] top-[8%]">
+        <div className="size-20 rounded-full bg-[#60a5fa] opacity-[0.07] sm:size-28" />
+      </div>
+
+      {/* square — right, tilted */}
+      <div data-speed="0.8" data-spin="35" className="absolute right-[9%] top-[22%]">
+        <div className="size-14 rotate-45 rounded-md bg-[#f472b6] opacity-[0.08] sm:size-20" />
+      </div>
+
+      {/* ring — left center */}
+      <div data-speed="1.5" data-spin="18" className="absolute left-[4%] top-[48%]">
+        <div className="size-24 rounded-full border-[5px] border-[#34d399] opacity-[0.09] sm:size-32" />
+      </div>
+
+      {/* triangle — right center */}
+      <div data-speed="1" className="absolute right-[6%] top-[55%]">
+        <div className="size-0 border-x-[28px] border-b-[48px] border-x-transparent border-b-[#fbbf24] opacity-[0.07] sm:border-x-[36px] sm:border-b-[62px]" />
+      </div>
+
+      {/* dot — bottom left */}
+      <div data-speed="0.6" className="absolute bottom-[18%] left-[12%]">
+        <div className="size-5 rounded-full bg-[#a78bfa] opacity-[0.12] sm:size-7" />
+      </div>
+
+      {/* cross — bottom right */}
+      <div data-speed="1.3" data-spin="30" className="absolute bottom-[12%] right-[10%]">
+        <div className="relative size-16 opacity-[0.07] sm:size-22">
+          <div className="absolute left-1/2 top-0 h-full w-3 -translate-x-1/2 rounded-full bg-[#fb923c]" />
+          <div className="absolute left-0 top-1/2 h-3 w-full -translate-y-1/2 rounded-full bg-[#fb923c]" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Feature row ────────────────────────────────────────────────────────────
+
+function FeatureRow({ feature, index }: { feature: Feature; index: number }) {
+  const rowRef = useRef<HTMLDivElement>(null)
+  const Visual = VISUALS[feature.visual]
+  const flipped = index % 2 !== 0
+
+  useEffect(() => {
+    const row = rowRef.current
+    if (!row) return
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+
+    const ctx = gsap.context(() => {
+      // text side
+      gsap.from(row.querySelectorAll(".feat-text > *"), {
+        y: 40, autoAlpha: 0, stagger: 0.08, duration: 0.7, ease: "power3.out",
+        scrollTrigger: { trigger: row, start: "top 78%", once: true },
+      })
+
+      // visual side
+      gsap.from(row.querySelector(".feat-vis"), {
+        y: 50, autoAlpha: 0, scale: 0.95, duration: 0.8, delay: 0.15, ease: "power3.out",
+        scrollTrigger: { trigger: row, start: "top 78%", once: true },
+      })
+    }, row)
+
+    return () => ctx.revert()
+  }, [])
+
+  const Icon = feature.icon
+
+  return (
+    <div
+      ref={rowRef}
+      className={`flex flex-col items-center gap-10 sm:gap-16 lg:gap-20 ${flipped ? "lg:flex-row-reverse" : "lg:flex-row"}`}
+    >
+      {/* text */}
+      <div className="feat-text flex-1 max-w-lg">
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1">
+          <Icon className="size-3.5 text-white/50" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-white/40">{feature.tag}</span>
+        </div>
+        <h3 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">{feature.title}</h3>
+        <p className="mt-4 text-base leading-relaxed text-muted-foreground sm:text-lg">{feature.body}</p>
+      </div>
+
+      {/* visual */}
+      <div className="feat-vis flex flex-1 items-center justify-center">
+        <Visual />
+      </div>
+    </div>
+  )
+}
+
+// ── Bottom trio ────────────────────────────────────────────────────────────
 
 const TRIO = [
-  { icon: Brain, title: "Remembers you", body: "Goals, preferences, and projects carry across every chat." },
-  { icon: Search, title: "Grounded answers", body: "Live web search with real citations — not guesswork." },
-  { icon: Mail, title: "Inbox, handled", body: "Read, triage, and send Gmail from the conversation." },
+  { icon: Brain, title: "Remembers you", body: "Your goals, preferences, and projects carry across every conversation.", color: "#818cf8" },
+  { icon: Search, title: "Grounded answers", body: "Live web search with real citations — not hallucinated guesswork.", color: "#34d399" },
+  { icon: Mail, title: "Inbox, handled", body: "Read, triage, and send Gmail right from the chat.", color: "#f472b6" },
 ]
 
-export function CinematicStory() {
-  const reduced = useReducedMotion()
-  return (
-    <section id="capabilities" className="relative z-10 w-full bg-background">
-      <ActFocus reduced={reduced} />
-      <ActBuild reduced={reduced} />
-      <ActSwarm reduced={reduced} />
+function TrioSection() {
+  const ref = useRef<HTMLDivElement>(null)
 
-      {/* quiet supporting trio */}
-      <div className="px-6 pb-28 pt-10 sm:pb-36">
-        <Reveal className="mx-auto max-w-6xl">
-          <div className="grid gap-px overflow-hidden rounded-2xl border border-white/10 bg-white/10 sm:grid-cols-3">
-            {TRIO.map((t) => {
-              const Icon = t.icon
-              return (
-                <div key={t.title} className="flex flex-col gap-3 bg-[#0a0b0e] p-7 transition-colors hover:bg-[#0d0e12]">
-                  <Icon className="size-[18px] text-white/50" />
-                  <div>
-                    <h4 className="text-[15px] font-semibold text-foreground">{t.title}</h4>
-                    <p className="mt-1 text-[13.5px] leading-relaxed text-muted-foreground">{t.body}</p>
-                  </div>
-                </div>
-              )
-            })}
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+
+    const ctx = gsap.context(() => {
+      gsap.from(".tri-card", {
+        y: 50, autoAlpha: 0, stagger: 0.1, duration: 0.7, ease: "power3.out",
+        scrollTrigger: { trigger: el, start: "top 82%", once: true },
+      })
+    }, el)
+
+    return () => ctx.revert()
+  }, [])
+
+  return (
+    <div ref={ref} className="mt-28 grid gap-4 sm:grid-cols-3 sm:mt-36">
+      {TRIO.map((t) => {
+        const Icon = t.icon
+        return (
+          <div key={t.title} className="tri-card group rounded-2xl border border-white/[0.07] bg-[#0a0b0e] p-6 transition-colors duration-300 hover:border-white/[0.12]">
+            <div className="mb-4 flex size-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
+              <Icon className="size-[18px]" style={{ color: t.color }} />
+            </div>
+            <h4 className="text-[15px] font-semibold text-foreground">{t.title}</h4>
+            <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">{t.body}</p>
           </div>
-        </Reveal>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Export ──────────────────────────────────────────────────────────────────
+
+export function CinematicStory() {
+  return (
+    <section id="capabilities" className="relative z-10 w-full bg-background px-6 py-28 sm:py-40">
+      <Shapes />
+
+      <div className="relative mx-auto max-w-6xl">
+        {/* section header */}
+        <div className="mb-20 max-w-2xl sm:mb-28">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1">
+            <Sparkles className="size-3.5 text-white/50" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-white/40">Capabilities</span>
+          </div>
+          <h2 className="text-4xl font-semibold tracking-tight text-foreground sm:text-5xl">
+            What it actually does.
+          </h2>
+          <p className="mt-4 text-lg leading-relaxed text-muted-foreground">
+            Not another chatbot. Simplicity focuses, builds real deliverables, and runs parallel agents — all in one calm interface.
+          </p>
+        </div>
+
+        {/* feature rows */}
+        <div className="space-y-24 sm:space-y-36">
+          {FEATURES.map((f, i) => (
+            <FeatureRow key={f.visual} feature={f} index={i} />
+          ))}
+        </div>
+
+        <TrioSection />
       </div>
     </section>
   )

@@ -486,11 +486,23 @@ interface StagedEmail {
 
 async function prepareEmail(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
   const raw = Array.isArray(args.emails) ? (args.emails as Record<string, unknown>[]) : []
-  const avail = ctx?.attachments ?? [] // files uploaded this turn
+  const avail = ctx?.attachments ?? [] // files uploaded / created this turn
   const byName = new Map(avail.map((a) => [a.name.toLowerCase(), a]))
+
+  // Named attachments not in the turn context may be files the user created in
+  // an earlier turn — look those up in their stored uploads by filename.
+  const { getUploadByName } = await import("@/lib/db/repo")
+  const resolveNamed = async (n: string): Promise<EmailAttachment | undefined> => {
+    const hit = byName.get(n.toLowerCase())
+    if (hit) return hit
+    if (!ctx?.user) return undefined
+    const stored = await getUploadByName(ctx.user.id, n)
+    return stored ? { id: stored.id, name: stored.name } : undefined
+  }
 
   const emails: StagedEmail[] = []
   const invalid: string[] = []
+  const missingFiles: string[] = []
   const single = raw.length === 1
   for (const e of raw.slice(0, 200)) {
     const to = String(e?.to ?? "").trim()
@@ -500,13 +512,18 @@ async function prepareEmail(args: Record<string, unknown>, ctx?: ToolCtx): Promi
       invalid.push(to || "(blank)")
       continue
     }
-    // Resolve requested attachment filenames → uploaded files. If none were
-    // named but there's a single email and files were uploaded this turn,
-    // attach them all (the "send this PDF to X" default).
+    // Resolve requested attachment filenames → uploaded/created files. If none
+    // were named but there's a single email and files exist this turn, attach
+    // them all (the "send this PDF to X" default).
     let attachments: EmailAttachment[] | undefined
     const named = Array.isArray(e?.attachments) ? (e.attachments as unknown[]).map((n) => String(n)) : null
     if (named && named.length) {
-      const resolved = named.map((n) => byName.get(n.toLowerCase())).filter((a): a is EmailAttachment => !!a)
+      const resolved: EmailAttachment[] = []
+      for (const n of named) {
+        const a = await resolveNamed(n)
+        if (a) resolved.push(a)
+        else missingFiles.push(n)
+      }
       if (resolved.length) attachments = resolved
     } else if (single && avail.length) {
       attachments = avail
@@ -534,6 +551,7 @@ async function prepareEmail(args: Record<string, unknown>, ctx?: ToolCtx): Promi
       `and click Send (or Approve All). ` +
       `${invalid.length ? `Note: ${invalid.length} invalid address(es) were skipped (${invalid.join(", ")}). ` : ""}` +
       `${avail.length && attachedCount === 0 ? "Note: uploaded file(s) were NOT attached — if the user wanted them attached, list their filenames in each email's attachments. " : ""}` +
+      `${missingFiles.length ? `Note: couldn't find file(s) to attach: ${[...new Set(missingFiles)].join(", ")} — they may have expired or the name didn't match. Call list_artifacts to see available files. ` : ""}` +
       `Tell the user it's ready to review, in one short line. Do not repeat the full body in chat.`,
     detail: attachedCount ? `${noun}, ${attachedCount} file(s)` : noun,
     ui: { t: "email", batchId, emails },
@@ -710,12 +728,17 @@ async function listArtifacts(args: Record<string, unknown>, ctx?: ToolCtx): Prom
   const { listUserArtifacts } = await import("@/lib/db/repo")
   const items = await listUserArtifacts(ctx.user.id, 30).catch(() => [])
   if (items.length === 0)
-    return { result: "The user hasn't made any apps or documents yet — nothing saved to reopen.", detail: "0" }
+    return { result: "The user hasn't made any apps, documents, or files yet — nothing saved to reopen.", detail: "0" }
   const lines = items.map((a, i) => `${i + 1}. ${a.title} — ${a.kind} · id: ${a.id}`)
+  const hasFile = items.some((a) => a.kind === "file")
   return {
     result:
       `Artifacts the user has already created (from earlier in this or other chats):\n${lines.join("\n")}\n\n` +
-      "To change one, call update_app or update_draft with its id — don't rebuild it from scratch.",
+      "• app / draft — call update_app or update_draft with its id to change it (don't rebuild from scratch).\n" +
+      (hasFile
+        ? "• file — to email one, call prepare_email and put the file's TITLE (its filename) in that email's attachments array; it's looked up by name. To let the user download it, share the link /api/uploads/<id>?download.\n"
+        : "") +
+      "• email — a previously staged email batch (already shown earlier).",
     detail: `${items.length} artifacts`,
   }
 }
@@ -1100,9 +1123,10 @@ export const TOOLS: Record<string, AgentTool> = {
           "and body for each. This does NOT send — it opens an approval card where the user clicks Send. NEVER " +
           "invent recipient addresses: if you don't have a real address, ask for it. For batch requests, add one " +
           "entry per recipient with that recipient's own tailored subject/body. " +
-          "If the user uploaded files this turn (their names are noted in the message as \"[Attached PDF: name]\") " +
-          "and wants them sent, put the exact filename(s) in that email's `attachments` array. For a single email, " +
-          "any files uploaded this turn are attached automatically.",
+          "To attach a file — one uploaded this turn (\"[Attached PDF: name]\"), one you just made with create_pdf, " +
+          "or one the user created earlier (use list_artifacts to find its name) — put its exact filename in that " +
+          "email's `attachments` array; files are resolved by name. For a single email, files available this turn " +
+          "are attached automatically.",
         parameters: {
           type: "object",
           properties: {
@@ -1118,7 +1142,8 @@ export const TOOLS: Record<string, AgentTool> = {
                   attachments: {
                     type: "array",
                     description:
-                      "Filenames of files uploaded this turn to attach to THIS email (must exactly match an uploaded filename). Omit if none.",
+                      "Exact filename(s) to attach to THIS email — a file uploaded this turn, one made with create_pdf, " +
+                      "or one from list_artifacts. Resolved by name. Omit if none.",
                     items: { type: "string" },
                   },
                 },

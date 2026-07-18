@@ -1,8 +1,11 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { memo, useEffect, useRef, useState } from "react"
 
-export function ThreeDiagram({
+// Memoized so a parent re-render (e.g. another streaming chunk landing on the
+// same message) doesn't tear down and rebuild the whole WebGL context — that
+// teardown was what caused the canvas to flash black and the chat to flicker.
+export const ThreeDiagram = memo(function ThreeDiagram({
   code,
   streaming = false,
 }: {
@@ -11,6 +14,10 @@ export function ThreeDiagram({
 }) {
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
+  // Always run the latest code without making it an effect dependency, so the
+  // scene builds once (when streaming ends) rather than on every keystroke.
+  const codeRef = useRef(code)
+  codeRef.current = code
 
   useEffect(() => {
     if (streaming) return
@@ -50,7 +57,7 @@ export function ThreeDiagram({
           "scene",
           "camera",
           "renderer",
-          code
+          codeRef.current
         )
         build(THREE, scene, camera, renderer)
 
@@ -106,7 +113,7 @@ export function ThreeDiagram({
       cancelled = true
       cleanup()
     }
-  }, [code, streaming])
+  }, [streaming])
 
   if (streaming) {
     return (
@@ -136,4 +143,4 @@ export function ThreeDiagram({
       </p>
     </div>
   )
-}
+})

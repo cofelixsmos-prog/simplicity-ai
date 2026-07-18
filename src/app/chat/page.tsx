@@ -57,6 +57,7 @@ import { ShaderBackground, type BgStatus } from "@/components/ui/shader-backgrou
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
 import { Splash } from "@/components/ui/splash"
 import { WelcomeOverlay } from "@/components/ui/welcome-overlay"
+import { ModeSelectOverlay } from "@/components/ui/mode-select-overlay"
 import { Tooltip } from "@/components/ui/tooltip"
 import { toast } from "@/components/ui/toast"
 import { playSend, playDone, playType, playBackspace } from "@/lib/sound"
@@ -258,6 +259,7 @@ export default function ChatPage() {
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [showWelcome, setShowWelcome] = useState(false)
   const [welcomeKind, setWelcomeKind] = useState<"login" | "register">("login")
+  const [showModeSelect, setShowModeSelect] = useState(false)
   // PDF attachments queued for the next message — text is extracted server-side
   // (the chat models are text-only) and folded into the request, not shown raw.
   const [attachments, setAttachments] = useState<PdfAttachment[]>([])
@@ -634,7 +636,7 @@ export default function ChatPage() {
     atBottomRef.current = true // sending returns focus to the latest turn
     stoppedRef.current = false
     playSend()
-    const ctrl = new AbortController()
+    let ctrl = new AbortController()
     abortRef.current = ctrl
     const pendingAttachments = attachments
     const next: Message[] = [
@@ -701,26 +703,58 @@ export default function ChatPage() {
         }),
       }).catch(() => {})
 
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: apiMessages,
-          model: modelId,
-          reasoning: model.supportsReasoning ? reasoning : "off",
-          systemPrompt: userRules || undefined,
-          gmailConnected,
-          focus: focusMode ? focusLevel : false,
-          // Files uploaded this turn — available for the AI to attach to an email.
-          attachments: pendingAttachments.length
-            ? pendingAttachments.map((a) => ({ id: a.attachmentId, name: a.name }))
-            : undefined,
-        }),
-        signal: ctrl.signal,
-      })
+    // The outgoing request body is identical across retries.
+    const requestBody = JSON.stringify({
+      messages: apiMessages,
+      model: modelId,
+      reasoning: model.supportsReasoning ? reasoning : "off",
+      systemPrompt: userRules || undefined,
+      gmailConnected,
+      focus: focusMode ? focusLevel : false,
+      // Files uploaded this turn — available for the AI to attach to an email.
+      attachments: pendingAttachments.length
+        ? pendingAttachments.map((a) => ({ id: a.attachmentId, name: a.name }))
+        : undefined,
+    })
 
-      if (!res.ok || !res.body) {
+    // Transient upstream hiccups (bad gateway, cold model, dropped connection)
+    // are common with the free tier — retry the initial connection a few times
+    // with backoff before giving up, so a single flaky attempt doesn't dead-end
+    // the turn. We only ever retry BEFORE any tokens have streamed; once the
+    // model starts answering we never re-send.
+    const MAX_ATTEMPTS = 3
+    const getResponse = async (): Promise<Response | null> => {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        if (stoppedRef.current) return null
+        try {
+          // Fresh controller per attempt so an aborted retry doesn't poison the next.
+          ctrl = new AbortController()
+          abortRef.current = ctrl
+          const res = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: requestBody,
+            signal: ctrl.signal,
+          })
+          if (res.ok && res.body) return res
+          // 4xx (except 429) won't fix themselves — don't waste retries on them.
+          if (res.status >= 400 && res.status < 500 && res.status !== 429) return res
+        } catch {
+          if (stoppedRef.current) return null // user hit stop — not a failure
+        }
+        if (attempt < MAX_ATTEMPTS && !stoppedRef.current) {
+          setThinking(true) // keep the "thinking" shimmer up while we retry
+          await new Promise((r) => setTimeout(r, attempt * 1200)) // 1.2s, 2.4s
+        }
+      }
+      return null
+    }
+
+    try {
+      const res = await getResponse()
+
+      if (!res || !res.ok || !res.body) {
+        if (stoppedRef.current) return
         startDowntime()
         setMessages((m) => {
           const copy = [...m]
@@ -1146,7 +1180,7 @@ export default function ChatPage() {
   // The world recedes while there's something to read: a panel open, a
   // sub-agent view, or an answer streaming in.
   const calmBg =
-    showWelcome || !!panelApp || !!panelDraft || !!panelVisual || agentPanelIdx !== null || (loading && !downtime)
+    showWelcome || showModeSelect || !!panelApp || !!panelDraft || !!panelVisual || agentPanelIdx !== null || (loading && !downtime)
 
   const firstName = user?.name?.trim().split(/\s+/)[0] || user?.email?.split("@")[0] || ""
 
@@ -1161,7 +1195,29 @@ export default function ChatPage() {
       {/* Welcome-back moment: glass card breathes in over the shader, holds,
           then dissolves to reveal the chat — same background throughout. */}
       {showWelcome && (
-        <WelcomeOverlay name={firstName} kind={welcomeKind} onDone={() => setShowWelcome(false)} />
+        <WelcomeOverlay
+          name={firstName}
+          kind={welcomeKind}
+          onDone={() => {
+            setShowWelcome(false)
+            setShowModeSelect(true)
+          }}
+        />
+      )}
+
+      {/* One-time mode picker right after the welcome moment: general work is
+          live today, deep research is scaffolded for later. */}
+      {showModeSelect && (
+        <ModeSelectOverlay
+          onSelect={(mode) => {
+            if (mode === "deep-research") return
+            if (mode === "studio") {
+              window.location.href = "/studio"
+              return
+            }
+            setShowModeSelect(false)
+          }}
+        />
       )}
 
       {/* Dims the screen after 15s of no activity (sooner/deeper in focus mode) */}

@@ -17,6 +17,13 @@ const PARTNERS = [
     url: "https://thezsmc.com",
     focus: "Research & Development",
   },
+  {
+    name: "Bench Labs",
+    description:
+      "Building open source benchmarks, datasets, experiments, research and AI. Everything Bench Labs builds is designed to be explored, reproduced, improved, and shared by the community — spanning research, engineering, and community work, including releases like bench-AGI and LRD (Latent Reasoning Directions).",
+    url: "https://huggingface.co/spaces/bench-labs",
+    focus: "Research & Community",
+  },
 ]
 
 export default function PartnersPage() {

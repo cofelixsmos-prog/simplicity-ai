@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
     const appCdns = "https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com";
     const csp = [
       "default-src 'self'",
-      `script-src 'self' 'unsafe-inline' ${appCdns}${dev ? " 'unsafe-eval'" : " 'wasm-unsafe-eval'"}`,
+      `script-src 'self' 'unsafe-inline' 'unsafe-eval' ${appCdns}`,
       `style-src 'self' 'unsafe-inline' ${appCdns} https://fonts.googleapis.com`,
       "img-src 'self' data: blob: https:",
       `font-src 'self' data: ${appCdns} https://fonts.gstatic.com`,

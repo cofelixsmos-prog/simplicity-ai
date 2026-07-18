@@ -1,42 +1,35 @@
 import { Navbar } from "@/components/ui/navbar"
 import { Footer } from "@/components/ui/footer"
-import { Terminal, Zap, Code2, Boxes, Gauge, Lock } from "lucide-react"
+import { Code2, Briefcase, Sparkles, Users, ArrowRight } from "lucide-react"
 
 export const metadata = {
   title: "Developers — Simplicity",
   description:
-    "Build with Simplicity. A clean, OpenAI-compatible API for R1 — streaming, fast, and simple.",
+    "Apply to join the Simplicity developer program. Build integrations, contribute to open-source, and shape what comes next.",
 }
 
-const features = [
-  { icon: Zap, title: "Streaming first", desc: "Token-by-token responses over a standard stream. Low latency, no polling." },
-  { icon: Code2, title: "OpenAI-compatible", desc: "Drop-in chat completions shape. Reuse the clients and tooling you already have." },
-  { icon: Boxes, title: "Multi-format output", desc: "Ask for flowcharts, 2D SVG illustrations, or 3D models — rendered client-side." },
-  { icon: Gauge, title: "One capable model", desc: "R1 — fast, agentic, and always on. No model-picker decisions." },
-  { icon: Lock, title: "Keys stay server-side", desc: "Calls run through your backend. Your API key is never exposed to the browser." },
-  { icon: Terminal, title: "Tiny surface area", desc: "One endpoint, a messages array, and a model id. That's the whole API." },
+const perks = [
+  {
+    icon: Code2,
+    title: "API access",
+    desc: "Early access to the Simplicity API when it launches — build integrations before anyone else.",
+  },
+  {
+    icon: Sparkles,
+    title: "Shape the product",
+    desc: "Direct channel to the team. Your feedback drives what we build next.",
+  },
+  {
+    icon: Users,
+    title: "Community",
+    desc: "Join a small group of builders who care about making AI simple and useful.",
+  },
+  {
+    icon: Briefcase,
+    title: "Recognition",
+    desc: "Top contributors get featured on the site and early access to every new feature.",
+  },
 ]
-
-const codeSample = `// app/api/chat/route.ts
-import OpenAI from "openai"
-
-const simplicity = new OpenAI({
-  apiKey: process.env.SIMPLICITY_API_KEY,
-  baseURL: "https://api.simplicity.ai/v1",
-})
-
-export async function POST(req: Request) {
-  const { messages } = await req.json()
-
-  const stream = await simplicity.chat.completions.create({
-    model: "r1",           // the one Simplicity model
-    messages,
-    stream: true,
-  })
-
-  // pipe the stream straight back to the client
-  return new Response(toReadable(stream))
-}`
 
 export default function DevelopersPage() {
   return (
@@ -50,66 +43,82 @@ export default function DevelopersPage() {
             Developers
           </p>
           <h1 className="text-4xl font-semibold leading-[1.1] tracking-tight text-foreground sm:text-5xl md:text-[56px]">
-            Build with Simplicity.
+            Build with us.
           </h1>
           <p className="mt-6 text-lg leading-relaxed text-muted-foreground">
-            One endpoint. Two models. Streaming by default. The whole API is a
-            messages array and a model id — intelligence without the integration
-            overhead.
+            Simplicity is opening up to developers. Apply for early access to
+            our API, contribute to the platform, and help shape what comes next.
           </p>
-          <div className="mt-9 flex flex-wrap gap-3">
+          <div className="mt-9">
             <a
-              href="/chat"
-              className="rounded-full bg-white px-6 py-3 text-sm font-medium text-black transition-all hover:shadow-[0_0_30px_-6px_rgba(255,255,255,0.5)]"
+              href="https://forms.gle/placeholder"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group inline-flex items-center gap-2 rounded-full bg-white px-7 py-3.5 text-sm font-semibold text-black transition-all hover:shadow-[0_0_30px_-6px_rgba(255,255,255,0.5)]"
             >
-              Try it live
-            </a>
-            <a
-              href="/resources"
-              className="rounded-full border border-border px-6 py-3 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
-            >
-              Read the docs
+              Apply now
+              <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
             </a>
           </div>
         </div>
 
-        {/* Code sample */}
-        <div className="mt-20 overflow-hidden rounded-2xl border border-border bg-card">
-          <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-            <span className="size-3 rounded-full bg-white/15" />
-            <span className="size-3 rounded-full bg-white/15" />
-            <span className="size-3 rounded-full bg-white/15" />
-            <span className="ml-3 font-mono text-xs text-muted-foreground">
-              route.ts
-            </span>
-          </div>
-          <pre className="overflow-x-auto p-5 text-[13px] leading-relaxed">
-            <code className="font-mono text-foreground/90">{codeSample}</code>
-          </pre>
-        </div>
-
-        {/* Features */}
+        {/* What you get */}
         <div className="mt-24">
           <h2 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
-            Everything you need, nothing you don&apos;t.
+            What you get
           </h2>
-          <div className="mt-10 grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
-            {features.map((f) => (
+          <div className="mt-10 grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-2">
+            {perks.map((p) => (
               <div
-                key={f.title}
+                key={p.title}
                 className="group bg-card p-7 transition-colors hover:bg-secondary/40"
               >
                 <span className="flex size-10 items-center justify-center rounded-xl border border-border bg-background text-foreground/80 transition-colors group-hover:text-foreground">
-                  <f.icon className="size-5" />
+                  <p.icon className="size-5" />
                 </span>
                 <h3 className="mt-5 text-base font-semibold text-foreground">
-                  {f.title}
+                  {p.title}
                 </h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-                  {f.desc}
+                  {p.desc}
                 </p>
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* FAQ */}
+        <div className="mt-24">
+          <h2 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">
+            Questions
+          </h2>
+          <div className="mt-8 divide-y divide-border border-t border-border">
+            <div className="py-6">
+              <h3 className="text-base font-medium text-foreground">
+                When does the API launch?
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                We&apos;re rolling it out in waves. Approved developers get
+                access first — apply now to secure your spot.
+              </p>
+            </div>
+            <div className="py-6">
+              <h3 className="text-base font-medium text-foreground">
+                Is the developer program free?
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                Yes, completely free during early access.
+              </p>
+            </div>
+            <div className="py-6">
+              <h3 className="text-base font-medium text-foreground">
+                What can I build?
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                Anything — integrations, plugins, bots, workflows. If it uses
+                Simplicity R1, we want to help you build it.
+              </p>
+            </div>
           </div>
         </div>
       </main>

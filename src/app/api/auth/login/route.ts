@@ -10,6 +10,7 @@ export function OPTIONS(req: Request) {
 }
 
 export async function POST(req: Request) {
+  try {
   // Two independent limits: per-IP (stops one attacker hammering many accounts
   // from one machine) and per-account below (stops credential stuffing spread
   // across many IPs at one target account). Each is itself burst+sustained.
@@ -55,4 +56,8 @@ export async function POST(req: Request) {
 
   await startSession(user.id)
   return jsonResponse({ user: { id: user.id, email: user.email, name: user.name } }, { status: 200 }, req)
+  } catch (err) {
+    console.error("[LOGIN ERROR]", err)
+    return jsonResponse({ error: "Something went wrong." }, { status: 500 }, req)
+  }
 }

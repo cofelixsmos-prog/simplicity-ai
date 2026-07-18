@@ -106,6 +106,20 @@ export async function getUpload(id: string, userId: string): Promise<Upload | un
   return (await db.select().from(uploads).where(and(eq(uploads.id, id), eq(uploads.userId, userId))))[0]
 }
 
+// Find a user's most-recent upload matching a filename (case-insensitive). Lets
+// the agent attach a file it created in an EARLIER turn ("email me that PDF")
+// without the file id having to survive in the turn context.
+export async function getUploadByName(userId: string, name: string): Promise<Upload | undefined> {
+  await initDb()
+  const target = name.trim().toLowerCase()
+  const rows = await db
+    .select()
+    .from(uploads)
+    .where(eq(uploads.userId, userId))
+    .orderBy(desc(uploads.createdAt))
+  return rows.find((u) => u.name.toLowerCase() === target)
+}
+
 // ── Sessions ────────────────────────────────────────────────────────────────
 export async function createSession(token: string, userId: string, expiresAt: number): Promise<void> {
   await initDb()

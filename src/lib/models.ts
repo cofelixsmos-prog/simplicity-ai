@@ -1,12 +1,7 @@
-// Public model metadata, shared by the chat UI and the API route.
-// NOTE: the real upstream provider + model id for each entry are intentionally
-// NOT here — they live server-side only (in the chat API route) so the real
-// model names never ship in the browser bundle.
-
 export interface ModelOption {
-  id: string // our public id (a1 / r1 / d1)
-  label: string // short label shown in the picker
-  name: string // full display name
+  id: string
+  label: string
+  name: string
   description: string
   supportsReasoning: boolean
 }
