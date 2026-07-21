@@ -3,7 +3,7 @@
 import { randomUUID } from "crypto"
 import { and, desc, eq, lt, isNotNull } from "drizzle-orm"
 import { db, initDb } from "./index"
-import { users, sessions, conversations, messages, uploads, memories, type User, type Conversation, type Message, type Upload, type Memory } from "./schema"
+import { users, sessions, conversations, messages, uploads, memories, harnessRequests, type User, type Conversation, type Message, type Upload, type Memory, type HarnessRequest } from "./schema"
 
 // ── Users ───────────────────────────────────────────────────────────────────
 export async function createUser(
@@ -28,6 +28,8 @@ export async function createUser(
     gmailAddress: extra?.gmailAddress ?? null,
     gmailAppPassword: extra?.gmailAppPassword ?? null,
     gmailRefreshToken: null,
+    harnessAccess: 0,
+    isAdmin: 0,
     createdAt: Date.now(),
   }
   await db.insert(users).values(row)
@@ -127,7 +129,13 @@ export async function createSession(token: string, userId: string, expiresAt: nu
 }
 
 // Returns the user for a live (non-expired) session token, else undefined.
-export async function getSessionUser(token: string): Promise<User | undefined> {
+// When `rollTtlMs` is given the session is a "rolling" one: once it's more than
+// halfway to expiry the window is pushed out again, so an active user is never
+// logged out. Returns whether it rolled, so the caller can re-stamp the cookie.
+export async function getSessionUser(
+  token: string,
+  rollTtlMs?: number
+): Promise<{ user: User; rolled: boolean } | undefined> {
   await initDb()
   const s = (await db.select().from(sessions).where(eq(sessions.id, token)))[0]
   if (!s) return undefined
@@ -135,7 +143,19 @@ export async function getSessionUser(token: string): Promise<User | undefined> {
     await db.delete(sessions).where(eq(sessions.id, token))
     return undefined
   }
-  return getUserById(s.userId)
+  const user = await getUserById(s.userId)
+  if (!user) return undefined
+
+  let rolled = false
+  if (rollTtlMs) {
+    // Only write past the halfway mark — ~1 write per half-TTL, not per request.
+    const halfway = s.expiresAt - rollTtlMs / 2
+    if (Date.now() > halfway) {
+      await db.update(sessions).set({ expiresAt: Date.now() + rollTtlMs }).where(eq(sessions.id, token))
+      rolled = true
+    }
+  }
+  return { user, rolled }
 }
 
 export async function deleteSession(token: string): Promise<void> {
@@ -353,4 +373,81 @@ export async function deleteMemory(id: string, userId: string): Promise<void> {
 export async function clearMemories(userId: string): Promise<void> {
   await initDb()
   await db.delete(memories).where(eq(memories.userId, userId))
+}
+
+// ── Harness access (invite-only) ─────────────────────────────────────────────
+export async function hasHarnessAccess(userId: string): Promise<boolean> {
+  await initDb()
+  const u = (await db.select({ a: users.harnessAccess }).from(users).where(eq(users.id, userId)))[0]
+  return !!u && u.a === 1
+}
+
+export async function setHarnessAccess(userId: string, granted: boolean): Promise<void> {
+  await initDb()
+  await db.update(users).set({ harnessAccess: granted ? 1 : 0 }).where(eq(users.id, userId))
+}
+
+export async function isAdmin(userId: string): Promise<boolean> {
+  await initDb()
+  const u = (await db.select({ a: users.isAdmin }).from(users).where(eq(users.id, userId)))[0]
+  return !!u && u.a === 1
+}
+
+// Return the user's latest Harness request (to show status / avoid duplicates).
+export async function getLatestHarnessRequest(userId: string): Promise<HarnessRequest | undefined> {
+  await initDb()
+  return (
+    await db
+      .select()
+      .from(harnessRequests)
+      .where(eq(harnessRequests.userId, userId))
+      .orderBy(desc(harnessRequests.createdAt))
+      .limit(1)
+  )[0]
+}
+
+export async function createHarnessRequest(
+  userId: string,
+  reason: string,
+  useCase: string,
+  company: string | null
+): Promise<HarnessRequest> {
+  await initDb()
+  const now = Date.now()
+  const row: HarnessRequest = {
+    id: randomUUID(),
+    userId,
+    reason: reason.slice(0, 2000),
+    useCase: useCase.slice(0, 2000),
+    company: company ? company.slice(0, 200) : null,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+  }
+  await db.insert(harnessRequests).values(row)
+  return row
+}
+
+// Admin: list requests (newest first) joined with the requester's email/name.
+export async function listHarnessRequests(
+  limit = 200
+): Promise<(HarnessRequest & { email: string; name: string | null; granted: boolean })[]> {
+  await initDb()
+  const rows = await db
+    .select({
+      req: harnessRequests,
+      email: users.email,
+      name: users.name,
+      access: users.harnessAccess,
+    })
+    .from(harnessRequests)
+    .innerJoin(users, eq(harnessRequests.userId, users.id))
+    .orderBy(desc(harnessRequests.createdAt))
+    .limit(limit)
+  return rows.map((r) => ({ ...r.req, email: r.email, name: r.name, granted: r.access === 1 }))
+}
+
+export async function setHarnessRequestStatus(id: string, status: "pending" | "approved" | "denied"): Promise<void> {
+  await initDb()
+  await db.update(harnessRequests).set({ status, updatedAt: Date.now() }).where(eq(harnessRequests.id, id))
 }

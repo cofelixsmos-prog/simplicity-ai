@@ -682,21 +682,54 @@ async function controlUi(args: Record<string, unknown>, ctx?: ToolCtx): Promise<
 async function createPdf(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
   if (!ctx?.user) return { result: "Can't create a file here (no signed-in user).", detail: "no user" }
 
+  // Models frequently send `blocks` as a JSON *string*, or wrap it in an object
+  // like {blocks:[...]}. Accept those shapes rather than silently producing an
+  // empty document.
+  let rawBlocks: unknown = args.blocks
+  if (typeof rawBlocks === "string") {
+    try {
+      rawBlocks = JSON.parse(rawBlocks)
+    } catch {
+      /* handled below */
+    }
+  }
+  if (rawBlocks && !Array.isArray(rawBlocks) && typeof rawBlocks === "object") {
+    const inner = (rawBlocks as Record<string, unknown>).blocks
+    if (Array.isArray(inner)) rawBlocks = inner
+  }
+
+  const theme = String(args.theme ?? "")
   const spec = {
     title: args.title ? String(args.title).slice(0, 300) : undefined,
     subtitle: args.subtitle ? String(args.subtitle).slice(0, 400) : undefined,
     accent: args.accent ? String(args.accent) : undefined,
-    blocks: Array.isArray(args.blocks) ? (args.blocks as unknown[]) : [],
+    theme: ["light", "slate", "warm", "mono"].includes(theme) ? theme : undefined,
+    cover: args.cover === true,
+    eyebrow: args.eyebrow ? String(args.eyebrow).slice(0, 80) : undefined,
+    footer: args.footer ? String(args.footer).slice(0, 120) : undefined,
+    blocks: (await import("@/lib/pdf")).normalizePdfBlocks(rawBlocks),
   }
-  if (!spec.blocks.length && !spec.title)
-    return { result: "Provide a title and content blocks for the PDF.", detail: "empty" }
+  if (!spec.blocks.length)
+    return {
+      result:
+        "No usable content blocks were received, so no PDF was created. Call create_pdf again and pass `blocks` " +
+        "as a real JSON ARRAY of block objects, e.g. " +
+        `[{"type":"heading","text":"Overview","level":1},{"type":"paragraph","text":"..."}]. ` +
+        "Every block needs a \"type\" and its text fields must be plain strings (not nested objects).",
+      detail: "no blocks",
+    }
 
   let buf: Buffer
   try {
     const { renderPdf } = await import("@/lib/pdf")
-    buf = renderPdf(spec as Parameters<typeof import("@/lib/pdf").renderPdf>[0])
-  } catch {
-    return { result: "Couldn't render that PDF — check the blocks are valid.", detail: "render error" }
+    buf = Buffer.from(renderPdf(spec as Parameters<typeof import("@/lib/pdf").renderPdf>[0]))
+  } catch (e) {
+    return {
+      result:
+        `Couldn't render that PDF (${e instanceof Error ? e.message : "unknown error"}). ` +
+        "Re-check the block shapes — text fields must be strings, table rows must be arrays, chart data must be numbers.",
+      detail: "render error",
+    }
   }
 
   const base =
@@ -719,6 +752,87 @@ async function createPdf(args: Record<string, unknown>, ctx?: ToolCtx): Promise<
       `attachments array (for a single email it also auto-attaches). To save it to Drive, mention it — it's stored.`,
     detail: name,
     ui: { t: "file" as const, id, name, mime: "application/pdf", size: buf.length, spec },
+  }
+}
+
+// ── create_ppt: generate a REAL .pptx file (attachable, downloadable) ────────
+// Uses the exact same builder as the inline deck preview, so the stored file
+// matches what the user saw in chat.
+async function createPpt(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user) return { result: "Can't create a file here (no signed-in user).", detail: "no user" }
+
+  // Same leniency as create_pdf: slides may arrive stringified or wrapped.
+  let rawSlides: unknown = args.slides
+  if (typeof rawSlides === "string") {
+    try {
+      rawSlides = JSON.parse(rawSlides)
+    } catch {
+      /* handled below */
+    }
+  }
+  if (rawSlides && !Array.isArray(rawSlides) && typeof rawSlides === "object") {
+    const inner = (rawSlides as Record<string, unknown>).slides
+    if (Array.isArray(inner)) rawSlides = inner
+  }
+
+  const { normalizeSlides, renderPptxBuffer, pptFileName } = await import("@/lib/ppt")
+  const theme = String(args.theme ?? "")
+  const spec = {
+    title: args.title ? String(args.title).slice(0, 300) : undefined,
+    subtitle: args.subtitle ? String(args.subtitle).slice(0, 400) : undefined,
+    accent: args.accent ? String(args.accent) : undefined,
+    theme: (["light", "dark", "navy"].includes(theme) ? theme : undefined) as "light" | "dark" | "navy" | undefined,
+    slides: normalizeSlides(rawSlides),
+  }
+  if (!spec.slides.length)
+    return {
+      result:
+        "No usable slides were received, so no deck was created. Call create_ppt again and pass `slides` as a real " +
+        `JSON ARRAY of slide objects, e.g. [{"layout":"title","title":"..."},{"layout":"content","title":"...","bullets":["..."]}]. ` +
+        "Every text field must be a plain string.",
+      detail: "no slides",
+    }
+
+  let buf: Buffer
+  try {
+    buf = Buffer.from(await renderPptxBuffer(spec))
+  } catch (e) {
+    return {
+      result: `Couldn't build that deck (${e instanceof Error ? e.message : "unknown error"}). Re-check the slide shapes.`,
+      detail: "render error",
+    }
+  }
+
+  const base =
+    String(args.filename || spec.title || "presentation")
+      .replace(/\.pptx$/i, "")
+      .replace(/[^\w.-]+/g, "_")
+      .slice(0, 80) || "presentation"
+  const name = args.filename ? `${base}.pptx` : pptFileName(spec)
+
+  const { createUpload } = await import("@/lib/db/repo")
+  const id = await createUpload(
+    ctx.user.id,
+    name,
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    buf.toString("base64")
+  )
+
+  ctx.attachments = [...(ctx.attachments ?? []), { id, name }]
+
+  return {
+    result:
+      `Created the deck “${name}” (${spec.slides.length} slides, ${Math.round(buf.length / 1024)} KB) and staged it as an attachment. ` +
+      `To EMAIL it: call prepare_email now and put “${name}” in that email's attachments array ` +
+      `(for a single email it also auto-attaches).`,
+    detail: `${spec.slides.length} slides`,
+    ui: {
+      t: "file" as const,
+      id,
+      name,
+      mime: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      size: buf.length,
+    },
   }
 }
 
@@ -1277,19 +1391,39 @@ export const TOOLS: Record<string, AgentTool> = {
           "Generate a REAL, downloadable PDF file (not just a preview) that can be attached to an email or saved. " +
           "Use this whenever a PDF needs to actually exist — the user asks to email a PDF, download one, or save one. " +
           "After calling it, the file is staged; call prepare_email next (listing the returned filename in attachments) " +
-          "to send it. Same block format as the inline pdf preview.",
+          "to send it. Same block format as the inline pdf preview.\n" +
+          "This renders flowcharts, timelines, org trees, charts and KPI tiles as real vector graphics — so ANY process, " +
+          "structure, comparison or number set should become a diagram block, not a paragraph describing it. " +
+          "Aim for a document that looks professionally designed: a cover, clear section headings, and a visual roughly " +
+          "every page or two.",
         parameters: {
           type: "object",
           properties: {
             title: { type: "string", description: "Document title (shown on the cover)." },
-            subtitle: { type: "string", description: "Optional subtitle." },
-            accent: { type: "string", description: "Optional hex accent color, e.g. DC2626." },
+            subtitle: { type: "string", description: "Optional subtitle / one-line summary." },
+            eyebrow: { type: "string", description: "Small label above the title on the cover, e.g. 'Quarterly Report'." },
+            accent: { type: "string", description: "Hex accent color without '#', e.g. 2563EB. Pick one that fits the subject." },
+            theme: {
+              type: "string",
+              enum: ["light", "slate", "warm", "mono"],
+              description: "Visual theme. light=clean default, slate=corporate, warm=editorial, mono=minimal print.",
+            },
+            cover: { type: "boolean", description: "true for a full-page cover (use for reports/proposals; skip for short memos)." },
+            footer: { type: "string", description: "Optional footer text; defaults to the title." },
             filename: { type: "string", description: "Optional file name (without .pdf); defaults from the title." },
             blocks: {
               type: "array",
               description:
-                "Content blocks, in order. Each is one of: {type:'heading',text,level:1|2}, {type:'paragraph',text}, " +
-                "{type:'list',items:[...],ordered?}, {type:'table',columns:[...],rows:[[...]]}, {type:'callout',text}, {type:'divider'}.",
+                "Content blocks in order. DESIGN THE DOCUMENT — mix text with visuals; never output page after page of plain paragraphs.\n" +
+                "TEXT: {type:'heading',text,level:1|2|3} · {type:'paragraph',text} · {type:'list',items:[],ordered?} · " +
+                "{type:'quote',text,attribution?} · {type:'callout',text,title?,tone:'info'|'success'|'warn'|'danger'} · {type:'divider'} · {type:'pagebreak'}\n" +
+                "DATA: {type:'table',columns:[],rows:[[]],caption?} · {type:'stats',items:[{value,label}]} (2-4 KPIs) · " +
+                "{type:'chart',chart:{type:'bar'|'line'|'pie'|'donut',labels:[],datasets:[{label?,data:[]}],caption?}}\n" +
+                "LAYOUT: {type:'columns',columns:[{heading?,text?,bullets?[]}]} (2-3) · {type:'comparison',left:{heading,items:[]},right:{heading,items:[]}}\n" +
+                "DIAGRAMS (drawn as real vectors — USE THESE for any process/flow/structure):\n" +
+                "  {type:'flowchart',nodes:[{id,text,kind:'process'|'decision'|'terminator'|'input'}],edges:[{from,to,label?}],direction?:'vertical'|'horizontal',caption?}\n" +
+                "  {type:'steps',items:[{title,text?}]} for sequential how-to · {type:'timeline',items:[{date,title,text?}]} for chronology\n" +
+                "  {type:'tree',root,children:[{text,children?:[]}],caption?} for hierarchy/org/architecture",
               items: { type: "object" },
             },
           },
@@ -1299,6 +1433,45 @@ export const TOOLS: Record<string, AgentTool> = {
     },
     label: (a) => `Creating PDF “${String(a.title ?? "document").slice(0, 50)}”`,
     run: createPdf,
+  },
+  create_ppt: {
+    schema: {
+      type: "function",
+      function: {
+        name: "create_ppt",
+        description:
+          "Generate a REAL, downloadable .pptx presentation file that can be attached to an email or saved. " +
+          "Use this when the deck must actually EXIST as a file — the user asks to email a deck, download one, or save one. " +
+          "For a deck the user just wants to look at in chat, use a fenced `ppt` block instead (it previews instantly). " +
+          "After calling it, the file is staged; call prepare_email next (listing the returned filename in attachments) to send it. " +
+          "Same slide schema as the `ppt` block — favor the visual layouts over bullet lists.",
+        parameters: {
+          type: "object",
+          properties: {
+            title: { type: "string", description: "Deck title (used on the cover and in the footer)." },
+            subtitle: { type: "string", description: "Optional subtitle for the cover." },
+            theme: { type: "string", enum: ["light", "dark", "navy"], description: "Visual theme." },
+            accent: { type: "string", description: "Hex accent color without '#', e.g. 2563EB." },
+            filename: { type: "string", description: "Optional file name (without .pptx); defaults from the title." },
+            slides: {
+              type: "array",
+              description:
+                "Slides in order. Each has a \"layout\" plus its fields:\n" +
+                "title {title,subtitle,eyebrow} · section/closing {title,subtitle,eyebrow} · agenda {items[]} · " +
+                "content {title,bullets[],chart?} · columns {title,columns:[{heading,bullets[]}]} · " +
+                "metrics {title,metrics:[{value,label}]} · quote {quote,attribution} · " +
+                "bignumber {title,value,caption,note} · process {title,steps:[{title,text}]} · " +
+                "timeline {title,timeline:[{date,title,text}]} · comparison {title,left:{heading,items[]},right:{heading,items[]}}\n" +
+                "chart = {type:'bar'|'line'|'pie',labels:[],datasets:[{label,data:[]}]}",
+              items: { type: "object" },
+            },
+          },
+          required: ["title", "slides"],
+        },
+      },
+    },
+    label: (a) => `Creating deck “${String(a.title ?? "presentation").slice(0, 50)}”`,
+    run: createPpt,
   },
   list_artifacts: {
     schema: {

@@ -33,10 +33,19 @@ const COLUMNS: { heading: string; links: { label: string; href: string }[] }[] =
   {
     heading: "Company",
     links: [
-      { label: "Resources", href: "/resources" },
+      { label: "Companies", href: "/companies" },
+      { label: "Bench Labs", href: "/bench-labs" },
       { label: "Partners", href: "/partners" },
+      { label: "Resources", href: "/resources" },
       { label: "Early access", href: "/register" },
-      { label: "Sign in", href: "/login" },
+    ],
+  },
+  {
+    heading: "Legal",
+    links: [
+      { label: "Privacy Policy", href: "/privacy" },
+      { label: "Terms of Service", href: "/terms" },
+      { label: "Cookie Policy", href: "/cookies" },
     ],
   },
 ]
@@ -91,7 +100,7 @@ export function Footer({ brand = "Simplicity" }: FooterProps) {
   return (
     <footer ref={footerRef} id="company" className="relative z-10 w-full border-t border-border bg-background">
       <div className="mx-auto max-w-6xl px-6 py-16">
-        <div ref={gridRef} className="grid gap-12 md:grid-cols-[1.4fr_repeat(3,1fr)]">
+        <div ref={gridRef} className="grid gap-12 sm:grid-cols-2 md:grid-cols-[1.4fr_repeat(4,1fr)]">
           {/* brand block */}
           <div>
             <Link href="/" className="flex items-center gap-2.5 text-[16px] font-semibold tracking-tight text-foreground">

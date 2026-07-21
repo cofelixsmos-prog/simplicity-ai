@@ -1,8 +1,8 @@
 "use client"
 
-import { Sparkles, FlaskConical, Box } from "lucide-react"
+import { Sparkles, FlaskConical, Box, Share2 } from "lucide-react"
 
-export type WorkMode = "general" | "deep-research" | "studio"
+export type WorkMode = "general" | "deep-research" | "studio" | "harness"
 
 export function ModeSelectOverlay({ onSelect }: { onSelect: (mode: WorkMode) => void }) {
   return (
@@ -19,7 +19,7 @@ export function ModeSelectOverlay({ onSelect }: { onSelect: (mode: WorkMode) => 
           <p className="mt-2 text-[15px] text-white/50">Pick a mode to get started — you can switch anytime.</p>
         </div>
 
-        <div className="anim-fade grid w-full gap-4 sm:grid-cols-3" style={{ ["--delay" as string]: "200ms" }}>
+        <div className="anim-fade grid w-full gap-4 sm:grid-cols-2 lg:grid-cols-4" style={{ ["--delay" as string]: "200ms" }}>
           {/* General work */}
           <button
             type="button"
@@ -47,6 +47,24 @@ export function ModeSelectOverlay({ onSelect }: { onSelect: (mode: WorkMode) => 
             <span className="text-lg font-semibold text-white">Studio</span>
             <span className="text-[13.5px] leading-relaxed text-white/50">
               Build 2D and 3D objects on a live canvas — cars, buildings, floor plans, anything.
+            </span>
+          </button>
+
+          {/* Harness — autonomous orchestration (invite-only) */}
+          <button
+            type="button"
+            onClick={() => onSelect("harness")}
+            className="group liquid-glass liquid-glass-soft glass-panel relative flex flex-col items-start gap-3 p-6 text-left transition-transform hover:-translate-y-0.5"
+          >
+            <span className="absolute top-4 right-4 rounded-full border border-white/20 bg-black/30 px-2.5 py-1 text-[10px] font-medium uppercase tracking-wider text-white/70">
+              Invite
+            </span>
+            <span className="flex size-10 items-center justify-center rounded-full border border-white/15 bg-white/[0.04]">
+              <Share2 className="size-4.5 text-white/80" strokeWidth={1.6} />
+            </span>
+            <span className="text-lg font-semibold text-white">Harness</span>
+            <span className="text-[13.5px] leading-relaxed text-white/50">
+              Give one objective. An executive AI spawns specialist agents to plan, build, verify, and deliver.
             </span>
           </button>
 

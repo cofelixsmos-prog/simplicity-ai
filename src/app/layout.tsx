@@ -5,6 +5,7 @@ import { GlassPointer } from "@/components/ui/glass-pointer";
 import { Toaster } from "@/components/ui/toast";
 import { NightMode } from "@/components/ui/night-mode";
 import { SmoothScroll } from "@/components/ui/smooth-scroll";
+import { CookieConsent } from "@/components/ui/cookie-consent";
 
 const poppins = Poppins({
   variable: "--font-sans",
@@ -111,6 +112,7 @@ export default function RootLayout({
         {children}
         <Toaster />
         <NightMode />
+        <CookieConsent />
       </body>
     </html>
   );

@@ -125,7 +125,7 @@ You may call tools multiple times and combine their results. After using tools, 
 
 # VISUALS & DELIVERABLES
 You can produce these. Choose the right one for the request.
-FORMATTING RULE: every fenced block (\`\`\`ppt, \`\`\`chart, \`\`\`mermaid, \`\`\`svg, \`\`\`excel, \`\`\`threejs) MUST start on its OWN line with a blank line before it — never glue the opening \`\`\` onto the end of a sentence (write "…here's the deck:" then a blank line, then the block). Otherwise it renders as raw text instead of the real preview. PDFs never use a fenced block — always call create_pdf instead (see below).
+FORMATTING RULE: every fenced block (\`\`\`ppt, \`\`\`pdf, \`\`\`chart, \`\`\`mermaid, \`\`\`svg, \`\`\`excel, \`\`\`threejs) MUST start on its OWN line with a blank line before it — never glue the opening \`\`\` onto the end of a sentence (write "…here's the deck:" then a blank line, then the block). Otherwise it renders as raw text instead of the real preview.
 
 ## 1. Flowcharts & diagrams → Mermaid
 For flowcharts, processes, sequences, org/tree structures, mind maps, ER diagrams.
@@ -252,8 +252,11 @@ for (let i = 0; i < 4; i++) { const fin = new THREE.Mesh(new THREE.BoxGeometry(0
 scene.add(g);
 \`\`\`
 
-## 5. Presentations → PPT JSON
-When the user wants a presentation / slide deck / PPT, output a fenced block tagged \`ppt\` with JSON. It renders as a live preview and a Download .pptx button, and exports a polished, professional deck.
+## 5. Presentations → PPT
+Two ways, same slide schema — pick by what the user needs:
+**(a) DEFAULT — a fenced \`ppt\` block.** Renders a live slide preview in chat with a Download .pptx button. Use this whenever the user just wants a deck to look at or download.
+**(b) The create_ppt TOOL — only when the file must EXIST server-side**, i.e. to EMAIL it or save it to Drive. It stages a real .pptx you then attach with prepare_email.
+Both use the identical builder, so the deck previewed is the deck delivered.
 
 BUILD A SOPHISTICATED, HIGH-IMPACT DECK — not a wall of bullet text. Here's what makes PPTs truly excellent:
 
@@ -276,6 +279,11 @@ BUILD A SOPHISTICATED, HIGH-IMPACT DECK — not a wall of bullet text. Here's wh
 - Each section should have a mini-arc: setup, evidence, conclusion.
 
 **Layout Mastery — Use EVERY type:**
+RULE: no more than TWO "content" (bullet) slides in a row. If a third would follow, convert it to a visual layout below. A deck that is mostly bullets is a BAD deck.
+- **"bignumber"** {title, value, caption, note}: ONE huge stat filling the slide. The most powerful slide in any deck — use it for your single headline number ("+38%", "$2.4M", "3×").
+- **"process"** {title, steps:[{title,text}]}: 3–5 numbered steps shown as connected cards. Use for any workflow, method, or "how it works".
+- **"timeline"** {title, timeline:[{date,title,text}]}: horizontal dated rail. Use for roadmaps, history, phases, milestones.
+- **"comparison"** {title, left:{heading,items[]}, right:{heading,items[]}}: two contrasting panels (left muted, right accent + checkmarks). Use for Before/After, Us/Them, Old/New.
 - **"content"** (bullets + optional chart): the workhorse. Keep bullets SHORT (~5-6 max, one line each). Charts should tell a story (revenue growth, market share, trends). Use an "eyebrow" for a section label.
 - **"metrics"** (2–4 big stat callouts): Perfect for at-a-glance impact. Use REAL numbers. Put metrics early if they're your hook (e.g., "Revenue up 40% YoY"). Design with breathing room — don't cram.
 - **"columns"** (two-up compare): Before/After, Pros/Cons, Current/Future, Us/Competitors. Headers are bold; bullets concise.
@@ -366,21 +374,58 @@ BUILD A SOPHISTICATED, HIGH-IMPACT DECK — not a wall of bullet text. Here's wh
 - ✓ Eyebrows used on content/metrics (adds polish)
 - ✓ A closing slide with next steps or CTA
 
-## 6. Documents → PDF via create_pdf TOOL
-When the user wants a PDF / report / document, ALWAYS call the create_pdf TOOL (never a fenced \`pdf\` block — there is no such preview block anymore). create_pdf renders the exact same polished document preview in chat (title, subtitle, headings, tables, callouts, a Download button) AND produces a real PDF file, in one call — so it's always downloadable and always ready to email.
-Pass these args to create_pdf: "title", optional "subtitle", optional "accent" hex color (no "#"), and "blocks" — the same schema either way:
-- Block types: "heading" (optional "level": 1 or 2), "paragraph", "list" (items[], optional "ordered": true for numbered), "table" (columns[] + rows[][]), "callout" (a highlighted key note), "divider".
-- Structure it with headings, put any data in a "table", and pull out key takeaways as "callout" — don't just stack paragraphs.
+## 6. Documents → PDF
+There are TWO ways to make a PDF. Pick by what the user needs:
+
+**(a) DEFAULT — a fenced \`pdf\` block.** Exactly like \`ppt\` and \`excel\`: write the JSON inside a fenced block and it renders a live document preview in chat with a Download .pdf button. Use this whenever the user just wants a document/report to read or download. It is the more reliable path — prefer it.
+
+\`\`\`pdf
+{ "title": "...", "theme": "slate", "accent": "2563EB", "cover": true, "blocks": [ ... ] }
+\`\`\`
+
+**(b) The create_pdf TOOL — only when the file must EXIST server-side**, i.e. you need to EMAIL it or save it to Drive. It takes the same fields as arguments and stages a real file you can then attach with prepare_email.
+
+Document-level fields (identical in both): "title", "subtitle", "eyebrow" (small label above the title), "accent" (hex, no "#"), "theme" ("light" | "slate" | "warm" | "mono"), "cover" (true for a full-page cover — use it for reports/proposals, skip for short memos), "footer", and "blocks".
+CRITICAL: "blocks" must be a real JSON ARRAY of objects, and every text field must be a plain STRING — never a nested object like {"text":{"text":"..."}}.
+
+### DESIGN THE DOCUMENT — this is the part that matters
+A wall of paragraphs is a FAILURE. Every PDF should look like a designer made it. Rules:
+1. **Visual rhythm** — a visual (diagram, chart, stats, table, callout) at least every page or two. Never more than ~3 paragraphs in a row.
+2. **Open strong** — "cover": true, then an "Executive summary" heading, then a "stats" row of 3–4 headline numbers if any exist.
+3. **Turn prose into structure.** If you catch yourself writing "First… then… finally", that is a "steps" or "flowchart". "In 2021… in 2023…" is a "timeline". "X vs Y" is a "comparison". A hierarchy or architecture is a "tree". Numbers over categories are a "chart".
+4. **Pick the accent from the subject** (finance 059669, legal 1E3A8A, health 0891B2, warning DC2626, creative 7C3AED) and pick a theme that fits: slate=corporate, warm=editorial, mono=minimal, light=default.
+5. Use "callout" with a tone ("info" | "success" | "warn" | "danger") for the one thing they must not miss — not for ordinary text.
+
+### Block reference
+TEXT: heading (level 1|2|3) · paragraph · list (items[], ordered?) · quote (text, attribution?) · callout (text, title?, tone?) · divider · pagebreak
+DATA: table (columns[], rows[][], caption?) · stats (items:[{value,label}], 2–4) · chart ({type:"bar"|"line"|"pie"|"donut", labels[], datasets:[{label?,data[]}], caption?})
+LAYOUT: columns (columns:[{heading?,text?,bullets?[]}], 2–3) · comparison (left:{heading,items[]}, right:{heading,items[]})
+DIAGRAMS — these render as REAL VECTOR GRAPHICS in the PDF, so always prefer them over describing something in words:
+- flowchart: { nodes:[{id,text,kind:"process"|"decision"|"terminator"|"input"}], edges:[{from,to,label?}], direction?:"vertical"|"horizontal", caption? }
+- steps: { items:[{title,text?}] } — sequential instructions
+- timeline: { items:[{date,title,text?}] } — chronology
+- tree: { root, children:[{text,children?:[]}], caption? } — hierarchy, org chart, architecture
+NOTE: mermaid/threejs/svg are chat-only previews and CANNOT go in a PDF. To put a flow or structure in a PDF, express it as a "flowchart"/"tree"/"steps" block instead.
+
 To EMAIL the PDF: call create_pdf first, then call prepare_email and put the returned filename in that email's attachments array (for a single email it also auto-attaches). Never claim a PDF is attached unless you called create_pdf and referenced its filename.
-Example blocks:
+
+Example (note the visual variety):
 [
-  { "type": "heading", "text": "Executive Summary", "level": 1 },
-  { "type": "paragraph", "text": "This report summarizes the Q3 market landscape and our position." },
-  { "type": "callout", "text": "Revenue grew 18% QoQ, led by the APAC region." },
-  { "type": "heading", "text": "Key Metrics", "level": 2 },
-  { "type": "table", "columns": ["Metric", "Q2", "Q3"], "rows": [["Revenue", "120", "171"], ["Churn", "4.0%", "3.1%"]] },
-  { "type": "heading", "text": "Next Steps", "level": 2 },
-  { "type": "list", "ordered": true, "items": ["Expand the APAC team", "Launch the tier-2 plan"] }
+  { "type": "heading", "text": "Executive summary", "level": 1 },
+  { "type": "paragraph", "text": "Revenue grew 18% QoQ, led by APAC, while churn fell for the third consecutive quarter." },
+  { "type": "stats", "items": [ {"value":"$171k","label":"Q3 revenue"}, {"value":"+18%","label":"QoQ growth"}, {"value":"3.1%","label":"Churn"} ] },
+  { "type": "callout", "tone": "success", "title": "Ahead of plan", "text": "APAC hit its annual target a quarter early." },
+  { "type": "chart", "chart": { "type": "bar", "labels": ["Q1","Q2","Q3"], "datasets": [{"label":"Revenue","data":[98,120,171]}], "caption": "Revenue by quarter ($k)" } },
+  { "type": "heading", "text": "How deals close", "level": 2 },
+  { "type": "flowchart", "nodes": [
+      {"id":"a","text":"Inbound lead","kind":"terminator"},
+      {"id":"b","text":"Discovery call"},
+      {"id":"c","text":"Budget approved?","kind":"decision"},
+      {"id":"d","text":"Closed won","kind":"terminator"} ],
+    "edges": [ {"from":"a","to":"b"}, {"from":"b","to":"c"}, {"from":"c","to":"d","label":"yes"} ] },
+  { "type": "comparison", "left": {"heading":"Before","items":["Manual handoffs","11-day cycle"]}, "right": {"heading":"After","items":["Automated routing","4-day cycle"]} },
+  { "type": "heading", "text": "Next steps", "level": 2 },
+  { "type": "steps", "items": [ {"title":"Expand APAC team","text":"Two AEs by November."}, {"title":"Launch tier-2 plan","text":"Pricing locked; ship in Q4."} ] }
 ]
 
 ## 7. Spreadsheets → Excel JSON
@@ -799,17 +844,30 @@ export async function POST(request: Request) {
 
           for (const c of calls) {
             let args: Record<string, unknown> = {}
+            let argParseError = ""
             try {
               args = JSON.parse(c.args || "{}")
-            } catch {
-              /* keep empty args */
+            } catch (e) {
+              // A malformed / truncated tool-call payload used to be swallowed
+              // here, so the tool ran with {} and failed with a useless "empty".
+              // Surface it instead so the model can retry with valid JSON.
+              argParseError = e instanceof Error ? e.message : "invalid JSON"
+              console.error(`[chat] tool ${c.name} arg parse failed: ${argParseError} · got ${c.args?.length ?? 0} chars`)
             }
             const tool = TOOLS[c.name]
             const label = tool ? tool.label(args) : `Running ${c.name}`
             emit({ t: "step", id: c.id, tool: c.name, label, status: "running" })
 
             let res: { result: string; detail?: string; ui?: Record<string, unknown> }
-            if (!tool) {
+            if (argParseError) {
+              res = {
+                result:
+                  `Your arguments for ${c.name} were not valid JSON (${argParseError}), so nothing ran. ` +
+                  `Call ${c.name} again with strictly valid JSON. Keep the payload compact — if it's long, ` +
+                  `split the work into smaller calls rather than emitting one huge object.`,
+                detail: "bad arguments",
+              }
+            } else if (!tool) {
               res = { result: `Unknown tool: ${c.name}`, detail: "error" }
             } else {
               try {

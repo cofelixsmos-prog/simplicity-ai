@@ -363,6 +363,25 @@ html.lenis body {
 }
 .anim-float { animation: appleFloat 6s var(--ease-smooth) infinite; }
 
+/* Harness: flowing dashes along an active agent connection (information flow). */
+@keyframes harnessFlow {
+  to { stroke-dashoffset: -16; }
+}
+.harness-flow { animation: harnessFlow 0.6s linear infinite; }
+
+/* Bench Labs hero: drifting fireflies over the night meadow. */
+@keyframes benchFirefly {
+  0%, 100% { opacity: 0.15; transform: translateY(0); }
+  50%      { opacity: 0.9; transform: translateY(-8px); }
+}
+.bench-firefly {
+  animation: benchFirefly 4s ease-in-out infinite;
+  box-shadow: 0 0 6px 1px rgba(200, 220, 255, 0.6);
+}
+@media (prefers-reduced-motion: reduce) {
+  .bench-firefly { animation: none; }
+}
+
 /* pure fade — opacity only, no translate/scale. For moments that should
    never read as a "pop" or bounce (e.g. the welcome-back overlay). */
 @keyframes fadeOnly {

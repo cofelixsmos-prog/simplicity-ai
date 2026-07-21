@@ -5,6 +5,18 @@ const nextConfig: NextConfig = {
   // auto-externalizes it) so it's required at runtime, not bundled.
   serverExternalPackages: ["@libsql/client"],
 
+  // "Terms and Conditions" and "Terms of Service" are the same document, so the
+  // common alternative URLs point at the single canonical /terms page rather
+  // than duplicating (and eventually contradicting) the text.
+  async redirects() {
+    return [
+      { source: "/terms-and-conditions", destination: "/terms", permanent: true },
+      { source: "/terms-of-service", destination: "/terms", permanent: true },
+      { source: "/privacy-policy", destination: "/privacy", permanent: true },
+      { source: "/cookie-policy", destination: "/cookies", permanent: true },
+    ]
+  },
+
   // Baseline security headers applied to every response.
   async headers() {
     const dev = process.env.NODE_ENV !== "production";

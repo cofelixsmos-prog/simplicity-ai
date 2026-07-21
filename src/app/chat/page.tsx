@@ -1215,6 +1215,12 @@ export default function ChatPage() {
               window.location.href = "/studio"
               return
             }
+            if (mode === "harness") {
+              // The /harness route itself gates on access and shows the request
+              // flow when the user isn't approved.
+              window.location.href = "/harness"
+              return
+            }
             setShowModeSelect(false)
           }}
         />

@@ -2,36 +2,28 @@
 
 import { useState } from "react"
 import { Download, FileText, Loader2 } from "lucide-react"
+import { normalizePdfBlocks, type PdfSpec, type PdfBlockSpec, type PdfChartSpec } from "@/lib/pdf"
 
-type Block =
-  | { type: "heading"; text: string; level?: 1 | 2 }
-  | { type: "paragraph"; text: string }
-  | { type: "list"; items: string[]; ordered?: boolean }
-  | { type: "table"; columns: string[]; rows: (string | number)[][] }
-  | { type: "callout"; text: string }
-  | { type: "divider" }
-
-export interface PdfSpec {
-  title?: string
-  subtitle?: string
-  accent?: string
-  blocks: Block[]
-}
+export type { PdfSpec } from "@/lib/pdf"
 
 export function parsePdf(code: string): PdfSpec | null {
   try {
     const o = JSON.parse(code.trim())
     if (!o || !Array.isArray(o.blocks)) return null
-    return o as PdfSpec
+    // Model output is untrusted — coerce every field to the expected shape so a
+    // stray object in a text field can't crash the React preview.
+    return { ...o, blocks: normalizePdfBlocks(o.blocks) } as PdfSpec
   } catch {
     return null
   }
 }
 
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.replace("#", "")
-  const n = parseInt(h.length === 3 ? h.split("").map((c) => c + c).join("") : h, 16)
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+// Same theme surface colors the real renderer uses, so the preview matches the file.
+const THEME_BG: Record<string, string> = {
+  light: "#ffffff",
+  slate: "#ffffff",
+  warm: "#faf8f5",
+  mono: "#ffffff",
 }
 
 export function PdfBlock({
@@ -51,7 +43,12 @@ export function PdfBlock({
   downloadName?: string
 }) {
   const [busy, setBusy] = useState(false)
-  const spec = specProp ?? (code ? parsePdf(code) : null)
+  // Normalize either source — a server-provided spec is still model-authored.
+  const spec = specProp
+    ? ({ ...specProp, blocks: normalizePdfBlocks(specProp.blocks) } as PdfSpec)
+    : code
+      ? parsePdf(code)
+      : null
 
   if (streaming) {
     return (
@@ -64,144 +61,22 @@ export function PdfBlock({
   if (!spec) return null
 
   const accentHex = (spec.accent ?? "2563EB").replace("#", "")
-  const accent = hexToRgb(accentHex)
-  const text = hexToRgb("0F172A")
-  const muted = hexToRgb("64748B")
-  const line = hexToRgb("E2E8F0")
-  const panel = hexToRgb("F1F5F9")
+  const paper = THEME_BG[spec.theme ?? "light"] ?? "#ffffff"
 
+  // Build the real PDF with the SAME renderer the server uses, so what the user
+  // downloads is byte-for-byte the document they previewed.
   const download = async () => {
     setBusy(true)
     try {
-      const { jsPDF } = await import("jspdf")
-      const autoTable = (await import("jspdf-autotable")).default
-      const doc = new jsPDF({ unit: "pt", format: "a4" })
-      const margin = 56
-      const pageW = doc.internal.pageSize.getWidth()
-      const pageH = doc.internal.pageSize.getHeight()
-      const maxW = pageW - margin * 2
-      let y = margin
-
-      const ensure = (h: number) => {
-        if (y + h > pageH - margin - 24) {
-          doc.addPage()
-          y = margin
-        }
-      }
-
-      // ── Title block (cover-style header) ──
-      if (spec.title) {
-        doc.setFillColor(...accent)
-        doc.rect(margin, y, 38, 5, "F")
-        y += 20
-        doc.setFont("helvetica", "bold")
-        doc.setFontSize(24)
-        doc.setTextColor(...text)
-        const lines = doc.splitTextToSize(spec.title, maxW)
-        doc.text(lines, margin, y)
-        y += lines.length * 26
-        if (spec.subtitle) {
-          doc.setFont("helvetica", "normal")
-          doc.setFontSize(12)
-          doc.setTextColor(...muted)
-          const sub = doc.splitTextToSize(spec.subtitle, maxW)
-          y += 6
-          doc.text(sub, margin, y)
-          y += sub.length * 16
-        }
-        y += 10
-        doc.setDrawColor(...line)
-        doc.setLineWidth(1)
-        doc.line(margin, y, pageW - margin, y)
-        y += 22
-      }
-
-      for (const b of spec.blocks) {
-        if (b.type === "heading") {
-          const lvl = b.level ?? 1
-          doc.setFont("helvetica", "bold")
-          doc.setFontSize(lvl === 1 ? 15 : 13)
-          const lines = doc.splitTextToSize(b.text, maxW - 12)
-          ensure(lines.length * 20 + 14)
-          y += 12
-          if (lvl === 1) {
-            doc.setFillColor(...accent)
-            doc.rect(margin, y - 9, 4, 13, "F")
-            doc.setTextColor(...accent)
-          } else {
-            doc.setTextColor(...text)
-          }
-          doc.text(lines, margin + (lvl === 1 ? 12 : 0), y)
-          y += lines.length * 20
-        } else if (b.type === "paragraph") {
-          doc.setFont("helvetica", "normal")
-          doc.setFontSize(11)
-          doc.setTextColor(...text)
-          const lines = doc.splitTextToSize(b.text, maxW)
-          ensure(lines.length * 16)
-          doc.text(lines, margin, y, { lineHeightFactor: 1.45 })
-          y += lines.length * 16 + 8
-        } else if (b.type === "list") {
-          doc.setFont("helvetica", "normal")
-          doc.setFontSize(11)
-          doc.setTextColor(...text)
-          b.items.forEach((it, i) => {
-            const marker = b.ordered ? `${i + 1}.` : "•"
-            const lines = doc.splitTextToSize(it, maxW - 22)
-            ensure(lines.length * 16 + 2)
-            doc.setTextColor(...accent)
-            doc.text(marker, margin + 4, y)
-            doc.setTextColor(...text)
-            doc.text(lines, margin + 22, y)
-            y += lines.length * 16 + 3
-          })
-          y += 8
-        } else if (b.type === "callout") {
-          doc.setFont("helvetica", "normal")
-          doc.setFontSize(11)
-          const lines = doc.splitTextToSize(b.text, maxW - 28)
-          const h = lines.length * 16 + 20
-          ensure(h)
-          doc.setFillColor(...panel)
-          doc.rect(margin, y - 6, maxW, h, "F")
-          doc.setFillColor(...accent)
-          doc.rect(margin, y - 6, 4, h, "F")
-          doc.setTextColor(...text)
-          doc.text(lines, margin + 16, y + 8, { lineHeightFactor: 1.4 })
-          y += h + 8
-        } else if (b.type === "divider") {
-          ensure(16)
-          doc.setDrawColor(...line)
-          doc.setLineWidth(1)
-          doc.line(margin, y, pageW - margin, y)
-          y += 16
-        } else if (b.type === "table") {
-          ensure(60)
-          autoTable(doc, {
-            startY: y,
-            head: [b.columns],
-            body: b.rows.map((r) => r.map((c) => String(c))),
-            margin: { left: margin, right: margin },
-            styles: { font: "helvetica", fontSize: 10, cellPadding: 6, textColor: text, lineColor: line, lineWidth: 0.5 },
-            headStyles: { fillColor: accent, textColor: [255, 255, 255], fontStyle: "bold" },
-            alternateRowStyles: { fillColor: panel },
-          })
-          y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 16
-        }
-      }
-
-      // ── Footer: title + page numbers on every page ──
-      const pages = doc.getNumberOfPages()
-      for (let p = 1; p <= pages; p++) {
-        doc.setPage(p)
-        doc.setFont("helvetica", "normal")
-        doc.setFontSize(8)
-        doc.setTextColor(...muted)
-        if (spec.title) doc.text(spec.title, margin, pageH - 24)
-        doc.text(`${p} / ${pages}`, pageW - margin, pageH - 24, { align: "right" })
-      }
-
-      doc.save(`${(spec.title ?? "document").replace(/[^\w]+/g, "_")}.pdf`)
+      const { renderPdf } = await import("@/lib/pdf")
+      const bytes = renderPdf(spec)
+      const blob = new Blob([bytes as BlobPart], { type: "application/pdf" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `${(spec.title ?? "document").replace(/[^\w]+/g, "_")}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
     } finally {
       setBusy(false)
     }
@@ -236,71 +111,364 @@ export function PdfBlock({
       </div>
 
       {/* paper-like preview */}
-      <div className="max-h-96 overflow-y-auto rounded-lg bg-white px-7 py-6 text-black">
+      <div
+        className="max-h-96 overflow-y-auto rounded-lg px-7 py-6 text-black"
+        style={{ background: paper }}
+      >
         {spec.title && (
           <>
+            {spec.eyebrow && (
+              <p className="mb-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-zinc-500">
+                {spec.eyebrow}
+              </p>
+            )}
             <div className="mb-2 h-1 w-9 rounded-full" style={{ background: `#${accentHex}` }} />
             <h1 className="text-lg font-bold">{spec.title}</h1>
             {spec.subtitle && <p className="mt-0.5 text-xs text-zinc-500">{spec.subtitle}</p>}
             <hr className="my-3 border-zinc-200" />
           </>
         )}
-        {spec.blocks.map((b, i) => {
-          if (b.type === "heading")
-            return (
-              <h2
-                key={i}
-                className={`mb-1.5 mt-3 font-semibold ${b.level === 2 ? "text-xs text-zinc-800" : "text-sm"}`}
-                style={b.level === 2 ? undefined : { color: `#${accentHex}` }}
+        {spec.blocks.map((b, i) => (
+          <BlockPreview key={i} block={b} accent={accentHex} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Per-block preview ───────────────────────────────────────────────────────
+
+function BlockPreview({ block: b, accent }: { block: PdfBlockSpec; accent: string }) {
+  const tone: Record<string, string> = {
+    info: "#2563EB",
+    success: "#16A34A",
+    warn: "#D97706",
+    danger: "#DC2626",
+  }
+
+  switch (b.type) {
+    case "heading":
+      return (
+        <h2
+          className={`mb-1.5 mt-3 font-semibold ${
+            b.level === 3 ? "text-[10px] uppercase tracking-wide text-zinc-500" : b.level === 2 ? "text-xs text-zinc-800" : "text-sm"
+          }`}
+          style={b.level === 1 ? { color: `#${accent}` } : undefined}
+        >
+          {b.text}
+        </h2>
+      )
+
+    case "paragraph":
+      return <p className="mb-2 text-xs leading-relaxed text-zinc-700">{b.text}</p>
+
+    case "list":
+      return (
+        <ul className={`mb-2 space-y-0.5 pl-5 ${b.ordered ? "list-decimal" : "list-disc"}`}>
+          {b.items.map((it, j) => (
+            <li key={j} className="text-xs leading-relaxed text-zinc-700">
+              {it}
+            </li>
+          ))}
+        </ul>
+      )
+
+    case "callout": {
+      const c = tone[b.tone ?? "info"]
+      return (
+        <div className="my-2 rounded border-l-2 px-3 py-2 text-xs text-zinc-700" style={{ borderColor: c, background: `${c}0f` }}>
+          {b.title && <span className="mb-0.5 block font-semibold" style={{ color: c }}>{b.title}</span>}
+          {b.text}
+        </div>
+      )
+    }
+
+    case "divider":
+      return <hr className="my-3 border-zinc-200" />
+
+    case "quote":
+      return (
+        <blockquote className="my-2 border-l-2 pl-3 text-xs italic text-zinc-700" style={{ borderColor: `#${accent}` }}>
+          {b.text}
+          {b.attribution && <footer className="mt-1 not-italic text-[10px] text-zinc-500">— {b.attribution}</footer>}
+        </blockquote>
+      )
+
+    case "stats":
+      return (
+        <div className="my-2 grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(b.items.length, 4)}, minmax(0,1fr))` }}>
+          {b.items.slice(0, 4).map((s, j) => (
+            <div key={j} className="rounded border border-zinc-200 bg-zinc-50 px-2 py-2 text-center">
+              <div className="text-sm font-bold" style={{ color: `#${accent}` }}>{s.value}</div>
+              <div className="text-[9px] leading-tight text-zinc-500">{s.label}</div>
+            </div>
+          ))}
+        </div>
+      )
+
+    case "columns":
+      return (
+        <div className="my-2 grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(b.columns.length, 3)}, minmax(0,1fr))` }}>
+          {b.columns.slice(0, 3).map((c, j) => (
+            <div key={j}>
+              {c.heading && <div className="mb-1 text-[11px] font-semibold" style={{ color: `#${accent}` }}>{c.heading}</div>}
+              {c.text && <p className="text-[11px] leading-relaxed text-zinc-700">{c.text}</p>}
+              {c.bullets && (
+                <ul className="list-disc space-y-0.5 pl-4">
+                  {c.bullets.map((t, k) => (
+                    <li key={k} className="text-[11px] leading-relaxed text-zinc-700">{t}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )
+
+    case "steps":
+      return (
+        <div className="my-2 space-y-2">
+          {b.items.map((s, j) => (
+            <div key={j} className="flex gap-2">
+              <span
+                className="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full text-[8px] font-bold text-white"
+                style={{ background: `#${accent}` }}
               >
-                {b.text}
-              </h2>
-            )
-          if (b.type === "paragraph")
-            return <p key={i} className="mb-2 text-xs leading-relaxed text-zinc-700">{b.text}</p>
-          if (b.type === "list")
-            return (
-              <ul key={i} className={`mb-2 space-y-0.5 pl-5 ${b.ordered ? "list-decimal" : "list-disc"}`}>
-                {b.items.map((it, j) => (
-                  <li key={j} className="text-xs leading-relaxed text-zinc-700">{it}</li>
+                {j + 1}
+              </span>
+              <div>
+                <div className="text-[11px] font-semibold text-zinc-800">{s.title}</div>
+                {s.text && <div className="text-[10px] leading-relaxed text-zinc-600">{s.text}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )
+
+    case "timeline":
+      return (
+        <div className="my-2 space-y-2">
+          {b.items.map((t, j) => (
+            <div key={j} className="flex gap-2">
+              <span className="w-10 shrink-0 text-right text-[9px] font-semibold text-zinc-500">{t.date}</span>
+              <span className="mt-1 size-1.5 shrink-0 rounded-full" style={{ background: `#${accent}` }} />
+              <div>
+                <div className="text-[11px] font-semibold text-zinc-800">{t.title}</div>
+                {t.text && <div className="text-[10px] leading-relaxed text-zinc-600">{t.text}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )
+
+    case "comparison":
+      return (
+        <div className="my-2 grid grid-cols-2 gap-2">
+          {[b.left, b.right].map((s, j) => (
+            <div key={j} className="overflow-hidden rounded border border-zinc-200">
+              <div
+                className="px-2 py-1 text-[10px] font-semibold text-white"
+                style={{ background: j === 0 ? "#64748B" : `#${accent}` }}
+              >
+                {s.heading}
+              </div>
+              <ul className="space-y-0.5 px-2 py-1.5">
+                {s.items.map((it, k) => (
+                  <li key={k} className="text-[10px] leading-relaxed text-zinc-700">
+                    <span style={{ color: j === 0 ? "#64748B" : `#${accent}` }}>{j === 0 ? "– " : "+ "}</span>
+                    {it}
+                  </li>
                 ))}
               </ul>
-            )
-          if (b.type === "callout")
-            return (
-              <div key={i} className="my-2 border-l-2 bg-zinc-50 px-3 py-2 text-xs text-zinc-700" style={{ borderColor: `#${accentHex}` }}>
-                {b.text}
+            </div>
+          ))}
+        </div>
+      )
+
+    case "flowchart":
+      return (
+        <div className="my-2 rounded border border-zinc-200 bg-zinc-50 p-3">
+          <div className={b.direction === "horizontal" ? "flex flex-wrap items-center gap-1.5" : "space-y-1.5"}>
+            {b.nodes.map((n, j) => (
+              <div key={n.id} className={b.direction === "horizontal" ? "" : "flex flex-col items-center"}>
+                <div
+                  className="px-2.5 py-1 text-center text-[10px] font-medium text-zinc-800"
+                  style={{
+                    border: `1px solid #${accent}`,
+                    background: n.kind === "terminator" ? `#${accent}` : "#fff",
+                    color: n.kind === "terminator" ? "#fff" : undefined,
+                    borderRadius: n.kind === "terminator" ? 999 : n.kind === "decision" ? 2 : 4,
+                    transform: n.kind === "decision" ? "skewX(-8deg)" : undefined,
+                  }}
+                >
+                  {n.text}
+                </div>
+                {b.direction !== "horizontal" && j < b.nodes.length - 1 && (
+                  <span className="text-[10px] leading-none text-zinc-400">↓</span>
+                )}
               </div>
-            )
-          if (b.type === "divider") return <hr key={i} className="my-3 border-zinc-200" />
-          if (b.type === "table")
-            return (
-              <div key={i} className="my-2 overflow-x-auto">
-                <table className="w-full border-collapse text-[10px]">
-                  <thead>
-                    <tr>
-                      {b.columns.map((c, j) => (
-                        <th key={j} className="border border-zinc-200 px-2 py-1 text-left font-semibold text-white" style={{ background: `#${accentHex}` }}>
-                          {c}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {b.rows.slice(0, 12).map((r, j) => (
-                      <tr key={j} className={j % 2 ? "bg-zinc-50" : ""}>
-                        {r.map((c, k) => (
-                          <td key={k} className="border border-zinc-200 px-2 py-1 text-zinc-700">{String(c)}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            ))}
+          </div>
+          {b.caption && <p className="mt-2 text-center text-[9px] italic text-zinc-500">{b.caption}</p>}
+        </div>
+      )
+
+    case "tree":
+      return (
+        <div className="my-2 rounded border border-zinc-200 bg-zinc-50 p-3 text-center">
+          <div
+            className="mx-auto mb-1.5 inline-block rounded px-3 py-1 text-[10px] font-semibold text-white"
+            style={{ background: `#${accent}` }}
+          >
+            {b.root}
+          </div>
+          <div className="flex justify-center gap-2">
+            {b.children.slice(0, 5).map((c, j) => (
+              <div key={j} className="flex-1">
+                <div className="rounded border bg-white px-1.5 py-1 text-[9px] font-medium text-zinc-800" style={{ borderColor: `#${accent}` }}>
+                  {c.text}
+                </div>
+                {c.children?.slice(0, 4).map((leaf, k) => (
+                  <div key={k} className="mt-0.5 text-[8px] text-zinc-500">{leaf}</div>
+                ))}
               </div>
-            )
-          return null
-        })}
+            ))}
+          </div>
+          {b.caption && <p className="mt-2 text-[9px] italic text-zinc-500">{b.caption}</p>}
+        </div>
+      )
+
+    case "chart":
+      return <ChartPreview chart={b.chart} accent={accent} />
+
+    case "pagebreak":
+      return <div className="my-3 border-t border-dashed border-zinc-300 text-center text-[8px] text-zinc-400">page break</div>
+
+    case "table":
+      return (
+        <div className="my-2 overflow-x-auto">
+          <table className="w-full border-collapse text-[10px]">
+            <thead>
+              <tr>
+                {b.columns.map((c, j) => (
+                  <th
+                    key={j}
+                    className="border border-zinc-200 px-2 py-1 text-left font-semibold text-white"
+                    style={{ background: `#${accent}` }}
+                  >
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {b.rows.slice(0, 12).map((r, j) => (
+                <tr key={j} className={j % 2 ? "bg-zinc-50" : ""}>
+                  {r.map((c, k) => (
+                    <td key={k} className="border border-zinc-200 px-2 py-1 text-zinc-700">
+                      {String(c)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {b.caption && <p className="mt-1 text-[9px] italic text-zinc-500">{b.caption}</p>}
+        </div>
+      )
+
+    default:
+      return null
+  }
+}
+
+// Lightweight SVG chart preview (the real PDF draws its own vectors).
+function ChartPreview({ chart, accent }: { chart: PdfChartSpec; accent: string }) {
+  const palette = [`#${accent}`, "#0EA5E9", "#8B5CF6", "#F59E0B", "#10B981", "#EF4444"]
+  const sets = chart.datasets ?? []
+  const labels = chart.labels ?? []
+  if (!sets.length || !labels.length) return null
+
+  const W = 320
+  const H = 110
+
+  if (chart.type === "pie" || chart.type === "donut") {
+    const data = sets[0].data
+    const total = data.reduce((a, b) => a + Math.max(0, b), 0) || 1
+    let ang = -Math.PI / 2
+    const r = 44
+    const cx = 52
+    const cy = H / 2
+    const arcs = data.map((v, i) => {
+      const slice = (Math.max(0, v) / total) * Math.PI * 2
+      const x1 = cx + r * Math.cos(ang)
+      const y1 = cy + r * Math.sin(ang)
+      ang += slice
+      const x2 = cx + r * Math.cos(ang)
+      const y2 = cy + r * Math.sin(ang)
+      const large = slice > Math.PI ? 1 : 0
+      return { d: `M${cx},${cy} L${x1},${y1} A${r},${r} 0 ${large} 1 ${x2},${y2} Z`, c: palette[i % palette.length] }
+    })
+    return (
+      <div className="my-2">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+          {arcs.map((a, i) => <path key={i} d={a.d} fill={a.c} />)}
+          {chart.type === "donut" && <circle cx={cx} cy={cy} r={r * 0.55} fill="#fff" />}
+          {labels.slice(0, 5).map((lb, i) => (
+            <g key={i}>
+              <rect x={116} y={18 + i * 16} width={8} height={8} rx={2} fill={palette[i % palette.length]} />
+              <text x={130} y={26 + i * 16} fontSize={9} fill="#3f3f46">
+                {lb} — {Math.round((Math.max(0, sets[0].data[i] ?? 0) / total) * 100)}%
+              </text>
+            </g>
+          ))}
+        </svg>
+        {chart.caption && <p className="text-center text-[9px] italic text-zinc-500">{chart.caption}</p>}
       </div>
+    )
+  }
+
+  const all = sets.flatMap((d) => d.data)
+  const maxV = Math.max(...all, 0)
+  const minV = Math.min(...all, 0)
+  const range = maxV - minV || 1
+  const padL = 6
+  const plotH = H - 22
+  const yOf = (v: number) => plotH - ((v - minV) / range) * plotH + 6
+
+  return (
+    <div className="my-2">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full">
+        {[0, 1, 2, 3].map((i) => (
+          <line key={i} x1={padL} y1={6 + (plotH / 3) * i} x2={W - 6} y2={6 + (plotH / 3) * i} stroke="#e4e4e7" strokeWidth={0.6} />
+        ))}
+        {chart.type === "bar"
+          ? sets.map((d, si) =>
+              d.data.map((v, i) => {
+                const gw = (W - padL - 6) / labels.length
+                const bw = Math.min(14, (gw * 0.6) / sets.length)
+                const x = padL + i * gw + gw / 2 - (bw * sets.length) / 2 + si * bw
+                const top = yOf(v)
+                const base = yOf(Math.max(0, minV))
+                return <rect key={`${si}-${i}`} x={x} y={Math.min(top, base)} width={bw - 1.5} height={Math.abs(base - top) || 1} rx={1.5} fill={palette[si % palette.length]} />
+              })
+            )
+          : sets.map((d, si) => {
+              const step = labels.length <= 1 ? 0 : (W - padL - 6) / (labels.length - 1)
+              const pts = d.data.map((v, i) => `${padL + i * step},${yOf(v)}`).join(" ")
+              return <polyline key={si} points={pts} fill="none" stroke={palette[si % palette.length]} strokeWidth={1.6} />
+            })}
+        {labels.slice(0, 8).map((lb, i) => {
+          const gw = (W - padL - 6) / labels.length
+          const x = chart.type === "bar" ? padL + (i + 0.5) * gw : padL + i * (labels.length <= 1 ? 0 : (W - padL - 6) / (labels.length - 1))
+          return (
+            <text key={i} x={x} y={H - 4} fontSize={8} fill="#71717a" textAnchor="middle">
+              {lb.length > 8 ? lb.slice(0, 7) + "…" : lb}
+            </text>
+          )
+        })}
+      </svg>
+      {chart.caption && <p className="text-center text-[9px] italic text-zinc-500">{chart.caption}</p>}
     </div>
   )
 }

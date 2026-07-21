@@ -29,6 +29,9 @@ export interface PublicUser {
   // is NEVER exposed to the client — only whether one is stored.
   gmailAddress: string | null
   gmailConnected: boolean
+  // Harness (invite-only autonomous orchestration).
+  harnessAccess: boolean
+  isAdmin: boolean
 }
 
 // ── Password hashing (scrypt — built into Node, no native deps) ─────────────
@@ -68,22 +71,43 @@ export async function endSession(): Promise<void> {
   store.delete(SESSION_COOKIE)
 }
 
+// Re-stamp the browser cookie after the DB session was rolled forward, so the
+// cookie's own max-age tracks the extended server-side expiry. Best-effort:
+// cookies() is read-only during an RSC render, and that must not break reads.
+async function restampCookie(rawToken: string): Promise<void> {
+  try {
+    ;(await cookies()).set(SESSION_COOKIE, rawToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: Math.floor(SESSION_TTL_MS / 1000),
+    })
+  } catch {
+    /* read-only cookie context — the DB expiry still rolled, so this is fine */
+  }
+}
+
 // The authenticated user (or null), with the password hash stripped.
+// Rolls the session forward so anyone who keeps using the app stays signed in.
 export async function getCurrentUser(): Promise<PublicUser | null> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value
   if (!token) return null
-  const user = await getSessionUser(hashToken(token))
-  return user
-    ? {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        systemPrompt: user.systemPrompt,
-        settings: user.settings,
-        gmailAddress: user.gmailAddress,
-        gmailConnected: !!(user.gmailAppPassword || user.gmailRefreshToken),
-      }
-    : null
+  const hit = await getSessionUser(hashToken(token), SESSION_TTL_MS)
+  if (!hit) return null
+  if (hit.rolled) await restampCookie(token)
+  const { user } = hit
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    systemPrompt: user.systemPrompt,
+    settings: user.settings,
+    gmailAddress: user.gmailAddress,
+    gmailConnected: !!(user.gmailAppPassword || user.gmailRefreshToken),
+    harnessAccess: user.harnessAccess === 1,
+    isAdmin: user.isAdmin === 1,
+  }
 }
 
 // The full user row (including secrets) for server-internal use only — e.g.
@@ -91,5 +115,8 @@ export async function getCurrentUser(): Promise<PublicUser | null> {
 export async function getCurrentUserRow(): Promise<User | null> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value
   if (!token) return null
-  return (await getSessionUser(hashToken(token))) ?? null
+  const hit = await getSessionUser(hashToken(token), SESSION_TTL_MS)
+  if (!hit) return null
+  if (hit.rolled) await restampCookie(token)
+  return hit.user
 }
