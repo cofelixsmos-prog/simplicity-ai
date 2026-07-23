@@ -2,7 +2,9 @@
 
 import { useCallback, useRef, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, ArrowUp, Share2, FileText } from "lucide-react"
+import { ArrowLeft, ArrowUp, Share2, FileText, Network } from "lucide-react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
 import { PHASE_META, type Collab, type Finding, type HarnessAgent, type Phase, type Question, type ReportSection } from "@/lib/harness/types"
@@ -36,6 +38,10 @@ export function HarnessWorkspace({ userName }: { userName: string | null }) {
   const [runId, setRunId] = useState<string | null>(null)
   const [steerInput, setSteerInput] = useState("")
   const [steerNote, setSteerNote] = useState("")
+
+  // center tabs + agent selection
+  const [tab, setTab] = useState<"web" | "report">("web")
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
 
   const answersRef = useRef<Record<string, string>>({})
 
@@ -254,7 +260,7 @@ export function HarnessWorkspace({ userName }: { userName: string | null }) {
       </header>
 
       {/* stage */}
-      <section className="relative z-10 min-h-0 flex-1">
+      <section className="relative z-10 flex min-h-0 flex-1 flex-col">
         {stage === "idle" ? (
           <div className="flex h-full flex-col items-center justify-center px-6 text-center">
             <span className="mb-5 flex size-12 items-center justify-center rounded-2xl border border-white/12 bg-white/[0.04] backdrop-blur-xl">
@@ -268,7 +274,29 @@ export function HarnessWorkspace({ userName }: { userName: string | null }) {
             </p>
           </div>
         ) : (
-          <AgentStage agents={agents} collabs={collabs} phase={phase} caption={stage === "done" ? "Research complete." : caption} />
+          <>
+            {/* two tabs */}
+            <div className="flex shrink-0 items-center justify-center gap-1 py-1.5">
+              <div className="flex gap-1 rounded-full border border-white/10 bg-black/30 p-1 backdrop-blur-xl">
+                <TabBtn active={tab === "web"} onClick={() => setTab("web")} icon={<Network className="size-3.5" />} label="Agent web" />
+                <TabBtn active={tab === "report"} onClick={() => setTab("report")} icon={<FileText className="size-3.5" />} label="Report" count={sections.length} />
+              </div>
+            </div>
+            <div className="min-h-0 flex-1">
+              {tab === "web" ? (
+                <AgentStage
+                  agents={agents}
+                  collabs={collabs}
+                  phase={phase}
+                  caption={stage === "done" ? "Research complete." : caption}
+                  selected={selectedAgent}
+                  onSelect={setSelectedAgent}
+                />
+              ) : (
+                <InlineReport title={title} summary={summary} sections={sections} sourceCount={sourceCount} running={stage === "running"} />
+              )}
+            </div>
+          </>
         )}
       </section>
 
@@ -369,5 +397,51 @@ export function HarnessWorkspace({ userName }: { userName: string | null }) {
         <ReportReveal title={title} summary={summary} sections={sections} sourceCount={sourceCount} onClose={() => setReportOpen(false)} />
       )}
     </main>
+  )
+}
+
+function TabBtn({ active, onClick, icon, label, count }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string; count?: number }) {
+  return (
+    <button onClick={onClick} className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[12.5px] font-medium transition-colors ${active ? "bg-white/12 text-white" : "text-white/45 hover:text-white"}`}>
+      {icon}
+      {label}
+      {count ? <span className="text-white/35">{count}</span> : null}
+    </button>
+  )
+}
+
+// The report as an inline tab (builds up live). Full-screen reveal is separate.
+function InlineReport({ title, summary, sections, sourceCount, running }: { title: string; summary: string; sections: ReportSection[]; sourceCount: number; running: boolean }) {
+  const ordered = [...sections].sort((a, b) => a.order - b.order)
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto max-w-2xl px-6 py-6">
+        {title ? <h1 className="text-xl font-semibold tracking-tight text-white">{title}</h1> : <div className="h-6 w-56 animate-pulse rounded bg-white/[0.06]" />}
+        <p className="mt-1.5 text-[11px] text-white/40">{sourceCount} sources{running ? " · building…" : ""}</p>
+        {summary && <div className="mt-5 rounded-2xl border border-white/[0.08] bg-white/[0.03] p-4 text-[13.5px] leading-relaxed text-white/70">{summary}</div>}
+        {ordered.length === 0 && !summary && <p className="mt-10 text-center text-[13px] text-white/30">The report will appear here as agents write it.</p>}
+        <div className="mt-8 space-y-7">
+          {ordered.map((s) => (
+            <section key={s.id}>
+              <h2 className={`mb-2.5 font-semibold tracking-tight text-white ${s.heading.toLowerCase() === "sources" ? "text-[15px] text-white/55" : "text-[17px]"}`}>{s.heading}</h2>
+              <div className="text-[14px] leading-[1.75] text-white/75">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
+                    a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-sky-300/90 underline decoration-white/20 underline-offset-2">{children}</a>,
+                    strong: ({ children }) => <strong className="font-semibold text-white/90">{children}</strong>,
+                    ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5 text-[12.5px] text-white/55">{children}</ol>,
+                    ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+                  }}
+                >
+                  {s.body}
+                </ReactMarkdown>
+              </div>
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }

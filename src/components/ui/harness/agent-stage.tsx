@@ -37,7 +37,11 @@ export function AgentStage({
   collabs,
   phase,
   caption,
+  selected,
+  onSelect,
 }: {
+  selected?: string | null
+  onSelect?: (id: string | null) => void
   agents: HarnessAgent[]
   collabs: Collab[]
   phase: Phase
@@ -47,6 +51,7 @@ export function AgentStage({
   const [, force] = useState(0)
   const nodesRef = useRef<Map<string, Node>>(new Map())
   const conferencing = phase === "conference"
+  const selectedAgent = agents.find((a) => a.id === selected) ?? null
 
   // Ensure a node exists for each agent; anchor on a ring.
   useMemo(() => {
@@ -125,7 +130,7 @@ export function AgentStage({
   }
 
   return (
-    <div ref={wrapRef} className="relative h-full w-full overflow-hidden">
+    <div ref={wrapRef} className="relative h-full w-full overflow-hidden" onClick={() => onSelect?.(null)}>
       <svg className="absolute inset-0 h-full w-full">
         {/* executive → agent tethers */}
         {agents.map((a) => {
@@ -139,8 +144,8 @@ export function AgentStage({
               y1={py(0.5)}
               x2={px(p.x)}
               y2={py(p.y)}
-              stroke={held ? "rgba(251,191,36,0.4)" : active ? `${AGENT_META[a.kind].color}88` : "rgba(255,255,255,0.07)"}
-              strokeWidth={active ? 1.3 : 0.8}
+              stroke={held ? "rgba(251,191,36,0.35)" : active ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.07)"}
+              strokeWidth={active ? 1.2 : 0.8}
             />
           )
         })}
@@ -164,18 +169,12 @@ export function AgentStage({
           )
         })}
 
-        {/* executive core */}
+        {/* executive core — solid ring, no gradient */}
         <g>
           <circle cx={px(0.5)} cy={py(0.5)} r="46" fill="#0c0c12" stroke="rgba(255,255,255,0.16)" strokeWidth="1.5" />
-          <circle cx={px(0.5)} cy={py(0.5)} r="46" fill="none" stroke="url(#hstageg)" strokeWidth="2">
+          <circle cx={px(0.5)} cy={py(0.5)} r="46" fill="none" stroke="rgba(255,255,255,0.5)" strokeWidth="2">
             <animate attributeName="stroke-dasharray" values="4 289;289 4;4 289" dur="6s" repeatCount="indefinite" />
           </circle>
-          <defs>
-            <linearGradient id="hstageg" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor="#38BDF8" />
-              <stop offset="100%" stopColor="#A78BFA" />
-            </linearGradient>
-          </defs>
           <text x={px(0.5)} y={py(0.5) - 2} textAnchor="middle" fontSize="12.5" fontWeight="700" fill="#fff">
             Executive
           </text>
@@ -191,10 +190,20 @@ export function AgentStage({
           const active = ACTIVE.includes(a.status)
           const held = a.status === "held"
           const done = a.status === "done"
+          const isSel = selected === a.id
           return (
-            <g key={a.id} opacity={held ? 0.5 : 1}>
+            <g
+              key={a.id}
+              opacity={held ? 0.5 : selected && !isSel ? 0.4 : 1}
+              className="cursor-pointer"
+              onClick={(e) => {
+                e.stopPropagation()
+                onSelect?.(isSel ? null : a.id)
+              }}
+            >
+              {isSel && <circle cx={px(p.x)} cy={py(p.y)} r="30" fill={meta.color} opacity="0.12" />}
               {/* quality ring */}
-              <circle cx={px(p.x)} cy={py(p.y)} r="22" fill="#0e0e14" stroke={held ? "#FBBF24" : done ? "#34D399" : meta.color} strokeWidth={held ? 2 : 1.5} strokeDasharray={held ? "3 3" : undefined} />
+              <circle cx={px(p.x)} cy={py(p.y)} r="22" fill="#0e0e14" stroke={held ? "#FBBF24" : done ? "#34D399" : meta.color} strokeWidth={isSel ? 2.5 : held ? 2 : 1.5} strokeDasharray={held ? "3 3" : undefined} />
               <circle
                 cx={px(p.x)}
                 cy={py(p.y)}
@@ -251,6 +260,124 @@ export function AgentStage({
           </span>
         </div>
       )}
+
+      {/* per-agent progress list (top-left) — click a row to inspect */}
+      {agents.length > 0 && !selected && (
+        <div className="absolute left-4 top-4 max-h-[70%] w-60 overflow-y-auto">
+          <div className="space-y-1.5">
+            {agents.map((a) => {
+              const meta = AGENT_META[a.kind]
+              return (
+                <button
+                  key={a.id}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onSelect?.(a.id)
+                  }}
+                  className="block w-full rounded-lg border border-white/[0.06] bg-black/30 px-2.5 py-1.5 text-left backdrop-blur-sm transition-colors hover:border-white/20 hover:bg-black/50"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="size-1.5 shrink-0 rounded-full" style={{ background: meta.color }} />
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-white/80">{a.name}</span>
+                    <span className="text-[10px] tabular-nums text-white/40">{a.progress}%</span>
+                  </div>
+                  <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/10">
+                    <div className="h-full rounded-full transition-all duration-500" style={{ width: `${a.progress}%`, background: a.status === "held" ? "#FBBF24" : meta.color }} />
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* rich, clean detail when an agent is selected (right) */}
+      {selectedAgent && (
+        <div className="absolute right-4 top-4 bottom-4 w-72 overflow-y-auto rounded-2xl border border-white/10 bg-black/50 p-4 backdrop-blur-xl" onClick={(e) => e.stopPropagation()}>
+          <AgentDetail agent={selectedAgent} onClose={() => onSelect?.(null)} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Rich but clean per-agent detail — everything about the agent, no clutter.
+function AgentDetail({ agent, onClose }: { agent: HarnessAgent; onClose: () => void }) {
+  const meta = AGENT_META[agent.kind]
+  const working = agent.status !== "done" && agent.status !== "failed"
+  return (
+    <div>
+      <div className="mb-3 flex items-center gap-2">
+        <span className="size-2.5 rounded-full" style={{ background: meta.color }} />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white">{agent.name}</span>
+        <button onClick={onClose} className="text-white/40 hover:text-white">✕</button>
+      </div>
+
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] uppercase tracking-wide text-white/55">
+        {meta.label}
+        <span className="text-white/25">·</span>
+        <span className={working ? "text-sky-300" : "text-emerald-300"}>{agent.status}</span>
+      </span>
+
+      <p className="mt-3 text-[12.5px] leading-relaxed text-white/70">{agent.task}</p>
+
+      <Bar label="Progress" value={agent.progress} color="#38BDF8" />
+      <Bar label="Confidence (data quality)" value={agent.confidence} color={meta.color} />
+
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center">
+        <Stat label="Runtime" value={`${(agent.runtimeMs / 1000).toFixed(0)}s`} />
+        <Stat label="Sources" value={String(agent.sourceCount)} />
+      </div>
+
+      {agent.queries.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-white/35">Searches</p>
+          {agent.queries.map((q, i) => (
+            <p key={i} className="truncate text-[11.5px] text-white/60">🔍 {q}</p>
+          ))}
+        </div>
+      )}
+
+      {agent.summary && (
+        <div className="mt-3">
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-white/35">Result</p>
+          <p className="text-[11.5px] leading-relaxed text-white/55">{agent.summary}</p>
+        </div>
+      )}
+
+      {agent.logs.length > 0 && (
+        <div className="mt-3">
+          <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-white/35">Activity</p>
+          <div className="max-h-32 overflow-y-auto rounded-lg border border-white/[0.06] bg-black/40 p-2 font-mono text-[10.5px] leading-relaxed text-white/50">
+            {agent.logs.slice(-8).map((l, i) => (
+              <div key={i} className="truncate">› {l}</div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Bar({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div className="mt-3">
+      <div className="mb-1 flex items-center justify-between text-[10.5px]">
+        <span className="uppercase tracking-wide text-white/35">{label}</span>
+        <span className="tabular-nums text-white/70">{value}%</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${value}%`, background: color }} />
+      </div>
+    </div>
+  )
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-white/[0.06] bg-white/[0.03] px-2 py-1.5">
+      <div className="text-[12.5px] font-semibold text-white">{value}</div>
+      <div className="text-[9px] uppercase tracking-wide text-white/35">{label}</div>
     </div>
   )
 }

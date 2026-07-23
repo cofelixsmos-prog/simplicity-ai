@@ -53,6 +53,7 @@ export interface HarnessAgent {
   phase: Phase
   status: AgentStatus
   confidence: number // quality of this agent's data (0–100)
+  progress: number // 0–100 through this agent's own steps
   runtimeMs: number
   queries: string[]
   sourceCount: number

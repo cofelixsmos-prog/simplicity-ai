@@ -427,6 +427,7 @@ class State {
       phase,
       status: "queued",
       confidence: 0,
+      progress: 4,
       runtimeMs: 0,
       queries: [],
       sourceCount: 0,
@@ -437,6 +438,10 @@ class State {
     return agent
   }
   set(id: string, patch: Partial<HarnessAgent>) {
+    // Derive an honest progress value from the step the agent is on.
+    if (patch.status && patch.progress === undefined) {
+      patch.progress = STEP_PROGRESS[patch.status] ?? undefined
+    }
     this.emitFn({ t: "agent_update", id, patch })
   }
   addSource(agentId: string, hit: SearchHit): Source {
@@ -452,8 +457,20 @@ class State {
     return src
   }
   done(agent: HarnessAgent, confidence: number, summary: string) {
-    this.emitFn({ t: "agent_update", id: agent.id, patch: { status: "done", confidence: clamp(confidence), summary } })
+    this.emitFn({ t: "agent_update", id: agent.id, patch: { status: "done", progress: 100, confidence: clamp(confidence), summary } })
   }
+}
+
+// Honest per-agent progress by the step it's on.
+const STEP_PROGRESS: Record<string, number> = {
+  queued: 6,
+  searching: 30,
+  reading: 55,
+  writing: 70,
+  verifying: 80,
+  held: 45,
+  done: 100,
+  failed: 100,
 }
 
 function clamp(n: number) {
