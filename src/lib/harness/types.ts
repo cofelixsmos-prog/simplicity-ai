@@ -1,22 +1,28 @@
-// Shared Harness types — used by the deep-research orchestrator (streamed as
-// NDJSON) and the workspace UI. Harness is a Claude-style deep-research system:
-// an executive decomposes an objective into ~20 dynamic specialist agents that
-// search the live web, extract findings, cross-check, and synthesize a cited
-// report.
+// Shared Harness types. Harness is a cinematic deep-research system: it clarifies
+// the objective full-screen, then runs a living web of specialist agents that
+// search, collaborate, get gated on quality by the executive, hold a peer-review
+// conference near completion, and reveal a cited report.
 
 export type AgentKind =
   | "planner"
-  | "researcher" // runs web searches on a subtopic
-  | "analyst" // extracts findings from sources
-  | "factcheck" // verifies claims across sources
-  | "synthesizer" // writes report sections
-  | "critic" // reviews quality / gaps
-  | "editor" // final polish
+  | "researcher"
+  | "analyst"
+  | "factcheck"
+  | "synthesizer"
+  | "critic"
+  | "editor"
 
-export type AgentStatus = "queued" | "searching" | "reading" | "writing" | "verifying" | "done" | "failed"
+export type AgentStatus =
+  | "queued"
+  | "searching"
+  | "reading"
+  | "writing"
+  | "verifying"
+  | "held" // paused by the executive for low quality
+  | "done"
+  | "failed"
 
-// The research proceeds in phases; agents belong to a phase.
-export type Phase = "plan" | "research" | "analyze" | "verify" | "synthesize" | "review" | "done"
+export type Phase = "clarify" | "plan" | "research" | "analyze" | "verify" | "synthesize" | "conference" | "review" | "done"
 
 export interface Source {
   id: string
@@ -31,8 +37,12 @@ export interface Finding {
   id: string
   text: string
   agentId: string
+  agentName: string
   sourceIds: string[]
-  confidence: number // 0–100
+  confidence: number // = data quality (0–100)
+  votes: number // peer votes from the conference
+  featured?: boolean
+  cut?: boolean
 }
 
 export interface HarnessAgent {
@@ -42,9 +52,9 @@ export interface HarnessAgent {
   task: string
   phase: Phase
   status: AgentStatus
-  confidence: number
+  confidence: number // quality of this agent's data (0–100)
   runtimeMs: number
-  queries: string[] // searches this agent ran
+  queries: string[]
   sourceCount: number
   findingCount: number
   logs: string[]
@@ -54,33 +64,48 @@ export interface HarnessAgent {
 export interface ReportSection {
   id: string
   heading: string
-  body: string // markdown
+  body: string
   agentId: string
   order: number
 }
 
-export interface StreamMessage {
+// A message between agents, shown as a pulse traveling the connecting line.
+export interface Collab {
   id: string
   fromId: string
+  toId: string // "executive" or an agent id
   fromName: string
   text: string
   at: number
 }
 
+export interface Question {
+  id: string
+  text: string
+  options: string[] // suggested answers; user may also type freely
+}
+
 // ── Stream events (one JSON object per NDJSON line) ──────────────────────────
 export type HarnessEvent =
-  | { t: "objective"; text: string; summary: string; etaMs: number; plannedAgents: number }
+  | { t: "run"; runId: string }
+  | { t: "steer_ack"; text: string } // executive acknowledged a live steer
+  | { t: "agent_retire"; id: string } // an agent was cut (off-track / low value)
+  | { t: "clarify"; questions: Question[]; intro: string }
+  | { t: "objective"; text: string; summary: string; title: string }
   | { t: "phase"; phase: Phase; label: string }
   | { t: "agent_spawn"; agent: HarnessAgent }
   | { t: "agent_update"; id: string; patch: Partial<HarnessAgent> }
   | { t: "agent_log"; id: string; line: string }
-  | { t: "agent_retire"; id: string } // agent finished and cleared
+  | { t: "collab"; collab: Collab }
+  | { t: "caption"; text: string } // the single quiet line narrating the run
+  | { t: "hold"; id: string; reason: string } // executive paused an agent
+  | { t: "resume"; id: string } // agent's quality recovered
   | { t: "source"; source: Source }
   | { t: "finding"; finding: Finding }
+  | { t: "conference"; entries: { agentId: string; agentName: string; findingId: string; text: string }[] }
+  | { t: "vote"; findingId: string; votes: number; featured: boolean; cut: boolean }
   | { t: "section"; section: ReportSection }
-  | { t: "section_update"; id: string; body: string }
-  | { t: "stream"; message: StreamMessage }
-  | { t: "stat"; sources: number; findings: number; agentsActive: number; agentsDone: number }
+  | { t: "ask"; question: Question } // mid-run clarification
   | { t: "done"; summary: string; title: string }
   | { t: "error"; message: string }
 
@@ -95,11 +120,13 @@ export const AGENT_META: Record<AgentKind, { label: string; color: string }> = {
 }
 
 export const PHASE_META: Record<Phase, { label: string; color: string }> = {
+  clarify: { label: "Clarifying", color: "#A78BFA" },
   plan: { label: "Planning", color: "#A78BFA" },
-  research: { label: "Research", color: "#38BDF8" },
-  analyze: { label: "Analysis", color: "#22D3EE" },
-  verify: { label: "Verification", color: "#F87171" },
-  synthesize: { label: "Synthesis", color: "#34D399" },
-  review: { label: "Review", color: "#FBBF24" },
+  research: { label: "Researching", color: "#38BDF8" },
+  analyze: { label: "Analyzing", color: "#22D3EE" },
+  verify: { label: "Verifying", color: "#F87171" },
+  synthesize: { label: "Synthesizing", color: "#34D399" },
+  conference: { label: "Peer review", color: "#FBBF24" },
+  review: { label: "Finalizing", color: "#FBBF24" },
   done: { label: "Complete", color: "#34D399" },
 }

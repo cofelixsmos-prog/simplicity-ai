@@ -1,71 +1,43 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useRef, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, ArrowUp, Share2, Square, FileText, Network } from "lucide-react"
+import { ArrowLeft, ArrowUp, Share2, FileText } from "lucide-react"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
-import {
-  AGENT_META,
-  PHASE_META,
-  type Finding,
-  type HarnessAgent,
-  type Phase,
-  type ReportSection,
-  type Source,
-  type StreamMessage,
-} from "@/lib/harness/types"
-import { AgentsPanel } from "@/components/ui/harness/agents-panel"
-import { AgentDetail } from "@/components/ui/harness/agent-detail"
-import { ReportView } from "@/components/ui/harness/report-view"
-import { AgentWeb } from "@/components/ui/harness/agent-web"
+import { PHASE_META, type Collab, type Finding, type HarnessAgent, type Phase, type Question, type ReportSection } from "@/lib/harness/types"
+import { AgentStage } from "@/components/ui/harness/agent-stage"
+import { ClarifyFlow, ClarifyLoading } from "@/components/ui/harness/clarify-flow"
+import { ReportReveal } from "@/components/ui/harness/report-reveal"
 
-type RunState = "idle" | "running" | "done"
-type CenterTab = "report" | "web"
-
-function fmt(ms: number) {
-  const s = Math.max(0, Math.floor(ms / 1000))
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
-}
-
-interface Stats {
-  sources: number
-  findings: number
-  agentsActive: number
-  agentsDone: number
-}
+type Stage = "idle" | "clarifying" | "running" | "done"
 
 export function HarnessWorkspace({ userName }: { userName: string | null }) {
-  const [run, setRun] = useState<RunState>("idle")
+  const [stage, setStage] = useState<Stage>("idle")
+  const [input, setInput] = useState("")
   const [objective, setObjective] = useState("")
   const [title, setTitle] = useState("")
   const [summary, setSummary] = useState("")
-  const [input, setInput] = useState("")
 
   const [phase, setPhase] = useState<Phase>("plan")
+  const [caption, setCaption] = useState("")
   const [agents, setAgents] = useState<HarnessAgent[]>([])
-  const [retired, setRetired] = useState<Set<string>>(new Set())
-  const [sources, setSources] = useState<Source[]>([])
-  const [findings, setFindings] = useState<Finding[]>([])
+  const [collabs, setCollabs] = useState<Collab[]>([])
   const [sections, setSections] = useState<ReportSection[]>([])
-  const [stream, setStream] = useState<StreamMessage[]>([])
-  const [stats, setStats] = useState<Stats>({ sources: 0, findings: 0, agentsActive: 0, agentsDone: 0 })
-  const [selected, setSelected] = useState<string | null>(null)
-  const [tab, setTab] = useState<CenterTab>("report")
+  const [sourceCount, setSourceCount] = useState(0)
+  const [findings, setFindings] = useState<Finding[]>([])
 
-  const [elapsed, setElapsed] = useState(0)
-  const startRef = useRef(0)
-  const abortRef = useRef<AbortController | null>(null)
+  // clarify
+  const [clarify, setClarify] = useState<{ intro: string; questions: Question[] } | null>(null)
+  const [midQuestion, setMidQuestion] = useState<Question | null>(null)
+  const [reportOpen, setReportOpen] = useState(false)
 
-  useEffect(() => {
-    if (run !== "running") return
-    startRef.current = Date.now()
-    const t = setInterval(() => {
-      setElapsed(Date.now() - startRef.current)
-      setAgents((prev) => prev.map((a) => (a.status !== "done" && a.status !== "failed" ? { ...a, runtimeMs: a.runtimeMs + 400 } : a)))
-    }, 400)
-    return () => clearInterval(t)
-  }, [run])
+  // live steering
+  const [runId, setRunId] = useState<string | null>(null)
+  const [steerInput, setSteerInput] = useState("")
+  const [steerNote, setSteerNote] = useState("")
+
+  const answersRef = useRef<Record<string, string>>({})
 
   const onEvent = useCallback((line: string) => {
     let ev: Record<string, unknown>
@@ -75,11 +47,25 @@ export function HarnessWorkspace({ userName }: { userName: string | null }) {
       return
     }
     switch (ev.t) {
+      case "run":
+        setRunId(String(ev.runId))
+        break
+      case "steer_ack":
+        setSteerNote(`Adjusting: “${String(ev.text).slice(0, 60)}”`)
+        setTimeout(() => setSteerNote(""), 4000)
+        break
+      case "agent_retire":
+        setAgents((p) => p.map((a) => (a.id === ev.id ? { ...a, status: "done" } : a)))
+        break
       case "objective":
         setSummary(String(ev.summary ?? ""))
+        setTitle(String(ev.title ?? ""))
         break
       case "phase":
         setPhase(ev.phase as Phase)
+        break
+      case "caption":
+        setCaption(String(ev.text ?? ""))
         break
       case "agent_spawn":
         setAgents((p) => [...p, ev.agent as HarnessAgent])
@@ -87,91 +73,78 @@ export function HarnessWorkspace({ userName }: { userName: string | null }) {
       case "agent_update":
         setAgents((p) => p.map((a) => (a.id === ev.id ? { ...a, ...(ev.patch as Partial<HarnessAgent>) } : a)))
         break
-      case "agent_log":
-        setAgents((p) => p.map((a) => (a.id === ev.id ? { ...a, logs: [...a.logs, String(ev.line)] } : a)))
+      case "hold":
+        setAgents((p) => p.map((a) => (a.id === ev.id ? { ...a, status: "held" } : a)))
         break
-      case "agent_retire":
-        setRetired((p) => new Set(p).add(String(ev.id)))
+      case "resume":
+        setAgents((p) => p.map((a) => (a.id === ev.id ? { ...a, status: "reading" } : a)))
+        break
+      case "collab":
+        setCollabs((p) => [...p.slice(-40), ev.collab as Collab])
         break
       case "source":
-        setSources((p) => [...p, ev.source as Source])
+        setSourceCount((n) => n + 1)
         break
       case "finding":
         setFindings((p) => {
           const f = ev.finding as Finding
           const i = p.findIndex((x) => x.id === f.id)
           if (i >= 0) {
-            const copy = [...p]
-            copy[i] = f
-            return copy
+            const c = [...p]
+            c[i] = f
+            return c
           }
           return [...p, f]
         })
+        break
+      case "vote":
+        setFindings((p) => p.map((f) => (f.id === ev.findingId ? { ...f, votes: Number(ev.votes), featured: Boolean(ev.featured), cut: Boolean(ev.cut) } : f)))
         break
       case "section":
         setSections((p) => {
           const s = ev.section as ReportSection
           const i = p.findIndex((x) => x.id === s.id)
           if (i >= 0) {
-            const copy = [...p]
-            copy[i] = s
-            return copy
+            const c = [...p]
+            c[i] = s
+            return c
           }
-          return [...p, s].sort((a, b) => a.order - b.order)
+          return [...p, s]
         })
         break
-      case "section_update":
-        setSections((p) => p.map((s) => (s.id === ev.id ? { ...s, body: String(ev.body) } : s)))
-        break
-      case "stream":
-        setStream((p) => [...p.slice(-60), ev.message as StreamMessage])
-        break
-      case "stat":
-        setStats({ sources: Number(ev.sources), findings: Number(ev.findings), agentsActive: Number(ev.agentsActive), agentsDone: Number(ev.agentsDone) })
+      case "ask":
+        setMidQuestion(ev.question as Question)
         break
       case "done":
         setSummary(String(ev.summary ?? ""))
         setTitle(String(ev.title ?? ""))
-        setRun("done")
+        setStage("done")
+        setTimeout(() => setReportOpen(true), 900)
         break
       case "error":
-        setRun("done")
+        setStage("done")
         break
     }
   }, [])
 
-  const launch = useCallback(
-    async (obj: string) => {
-      const o = obj.trim()
-      if (!o || run === "running") return
-      // New objective → agents gone, everything cleared.
-      setRun("running")
-      setObjective(o)
-      setTitle("")
-      setSummary("")
+  const startRun = useCallback(
+    async (obj: string, answers: Record<string, string>) => {
+      setStage("running")
       setPhase("plan")
+      setCaption("The executive is designing the research strategy…")
       setAgents([])
-      setRetired(new Set())
-      setSources([])
-      setFindings([])
+      setCollabs([])
       setSections([])
-      setStream([])
-      setStats({ sources: 0, findings: 0, agentsActive: 0, agentsDone: 0 })
-      setSelected(null)
-      setTab("report")
-      setElapsed(0)
-
-      const ctrl = new AbortController()
-      abortRef.current = ctrl
+      setFindings([])
+      setSourceCount(0)
       try {
         const res = await fetch("/api/harness/run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ objective: o }),
-          signal: ctrl.signal,
+          body: JSON.stringify({ objective: obj, clarifications: answers }),
         })
         if (!res.ok || !res.body) {
-          setRun("idle")
+          setStage("idle")
           return
         }
         const reader = res.body.getReader()
@@ -188,191 +161,213 @@ export function HarnessWorkspace({ userName }: { userName: string | null }) {
         }
         if (buf.trim()) onEvent(buf)
       } catch {
-        if (!ctrl.signal.aborted) setRun("idle")
+        setStage("idle")
       }
     },
-    [run, onEvent]
+    [onEvent]
   )
 
-  const selectedAgent = agents.find((a) => a.id === selected) ?? null
-  const activeAgents = agents.filter((a) => !retired.has(a.id) && a.status !== "done")
-  const lastStream = stream[stream.length - 1]
-
-  const orderedSections = useMemo(() => [...sections].sort((a, b) => a.order - b.order), [sections])
-
-  const send = () => {
-    const t = input.trim()
-    if (!t) return
+  // Begin: fetch clarifying questions, then show the full-screen flow.
+  const begin = useCallback(async () => {
+    const obj = input.trim()
+    if (!obj) return
+    setObjective(obj)
     setInput("")
-    launch(t)
+    setStage("clarifying")
+    setClarify(null)
+    try {
+      const res = await fetch("/api/harness/clarify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ objective: obj }),
+      })
+      const data = await res.json().catch(() => ({ intro: "", questions: [] }))
+      const questions = (data.questions ?? []) as Question[]
+      if (!questions.length) {
+        // nothing to ask — go straight to the run
+        startRun(obj, {})
+        return
+      }
+      setClarify({ intro: data.intro ?? "", questions })
+    } catch {
+      startRun(obj, {})
+    }
+  }, [input, startRun])
+
+  const newRun = () => {
+    setStage("idle")
+    setReportOpen(false)
+    setObjective("")
+    setTitle("")
+    setSummary("")
+    setRunId(null)
   }
 
-  // ── Idle: centered objective entry ──
-  if (run === "idle") {
-    return (
-      <main className="relative flex h-dvh flex-col overflow-hidden text-white">
-        <ShaderBackground fixed calm focus />
-        <LiquidGlassFilters />
-        <TopBar phase={null} elapsed={0} stats={stats} title="" />
-        <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-6 text-center">
-          <span className="mb-5 flex size-12 items-center justify-center rounded-2xl border border-white/12 bg-white/[0.04] backdrop-blur-xl">
-            <Share2 className="size-5 text-white/80" strokeWidth={1.5} />
-          </span>
-          <h1 className="text-[26px] font-semibold tracking-tight text-white">
-            {userName ? `${userName}, what should we research?` : "What should we research?"}
-          </h1>
-          <p className="mt-2 max-w-md text-[14px] leading-relaxed text-white/45">
-            Give one objective. A team of ~20 agents plans it, searches the live web, verifies findings, and writes a cited report.
-          </p>
-          <div className="mt-6 w-full max-w-[620px]">
-            <Composer value={input} onChange={setInput} onSend={send} running={false} placeholder="e.g. The state of India's EV market in 2026 — adoption, policy, key players, and outlook." big />
-            <div className="mt-3 flex flex-wrap justify-center gap-2">
-              {SUGGESTIONS.map((s) => (
-                <button key={s} onClick={() => { setInput(s); launch(s) }} className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/50 backdrop-blur-xl transition-colors hover:text-white">
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </main>
-    )
+  // Send a live steer into the running research (re-plans, adds/removes agents).
+  const sendSteer = async () => {
+    const m = steerInput.trim()
+    if (!m || !runId) return
+    setSteerInput("")
+    setSteerNote("Sent to the executive…")
+    try {
+      await fetch("/api/harness/steer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId, message: m }),
+      })
+    } catch {
+      setSteerNote("Couldn't reach the run.")
+    }
   }
 
-  // ── Running / done: three-column research workspace ──
+  const badge = stage === "done" ? "Complete" : PHASE_META[phase]?.label ?? ""
+
   return (
     <main className="relative flex h-dvh flex-col overflow-hidden text-white">
-      <ShaderBackground fixed calm focus />
+      <ShaderBackground fixed calm />
       <LiquidGlassFilters />
-      <TopBar phase={phase} elapsed={elapsed} stats={stats} title={title || objective} done={run === "done"} />
 
-      <div className="relative z-10 flex min-h-0 flex-1 gap-2 px-2 pb-2">
-        {/* LEFT: agents (dynamic) */}
-        <AgentsPanel
-          agents={agents}
-          retired={retired}
-          activeCount={activeAgents.length}
-          selected={selected}
-          onSelect={(id) => { setSelected(id); }}
-          phase={phase}
-        />
-
-        {/* CENTER: report / web */}
-        <section className="liquid-glass liquid-glass-soft glass-panel flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl">
-          <div className="flex h-11 shrink-0 items-center gap-1 border-b border-white/[0.06] px-2">
-            <Tab active={tab === "report"} onClick={() => setTab("report")} icon={<FileText className="size-3.5" />} label="Report" />
-            <Tab active={tab === "web"} onClick={() => setTab("web")} icon={<Network className="size-3.5" />} label="Agent web" />
-            <span className="ml-auto pr-2 text-[11px] text-white/35">{sections.length} sections · {findings.length} findings</span>
-          </div>
-          <div className="min-h-0 flex-1 overflow-hidden">
-            {tab === "report" ? (
-              <ReportView title={title} summary={summary} sections={orderedSections} phase={phase} running={run === "running"} sourceCount={stats.sources} />
-            ) : (
-              <AgentWeb agents={agents} retired={retired} selected={selected} onSelect={setSelected} phase={phase} stats={stats} />
+      {/* top bar */}
+      <header className="relative z-20 flex h-12 shrink-0 items-center justify-between px-4">
+        <div className="flex items-center gap-3">
+          <Link href="/chat" className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white/60 backdrop-blur-xl transition-colors hover:text-white">
+            <ArrowLeft className="size-3" /> Exit
+          </Link>
+          <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.2em] text-white/30">
+            <Share2 className="size-3" /> Harness
+          </span>
+          {objective && stage !== "idle" && <span className="hidden max-w-[340px] truncate text-[12px] text-white/40 sm:block">{title || objective}</span>}
+        </div>
+        {stage === "running" || stage === "done" ? (
+          <div className="flex items-center gap-3 text-[12px]">
+            <span className="flex items-center gap-1.5">
+              <span className="size-1.5 rounded-full" style={{ background: stage === "done" ? "#34D399" : PHASE_META[phase]?.color }} />
+              <span className="text-white/60">{badge}</span>
+            </span>
+            {stage === "done" && (
+              <button onClick={() => setReportOpen(true)} className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[12px] font-semibold text-black hover:opacity-90">
+                <FileText className="size-3.5" /> View report
+              </button>
             )}
           </div>
-        </section>
+        ) : null}
+      </header>
 
-        {/* RIGHT: detail / sources */}
-        <AgentDetail
-          agent={selectedAgent}
-          sources={sources}
-          findings={findings}
-          onClose={() => setSelected(null)}
-        />
-      </div>
-
-      {/* bottom: glass composer */}
-      <div className="relative z-20 flex flex-col items-center px-2 pb-3">
-        {run === "running" && lastStream && (
-          <p className="mb-1.5 max-w-[90%] truncate text-center text-[12px] text-white/35">
-            <span className="text-white/55">{lastStream.fromName}</span> · {lastStream.text}
-          </p>
+      {/* stage */}
+      <section className="relative z-10 min-h-0 flex-1">
+        {stage === "idle" ? (
+          <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+            <span className="mb-5 flex size-12 items-center justify-center rounded-2xl border border-white/12 bg-white/[0.04] backdrop-blur-xl">
+              <Share2 className="size-5 text-white/80" strokeWidth={1.5} />
+            </span>
+            <h1 className="text-[26px] font-semibold tracking-tight text-white">
+              {userName ? `${userName}, what should we research?` : "What should we research?"}
+            </h1>
+            <p className="mt-2 max-w-md text-[14px] leading-relaxed text-white/45">
+              Give one objective. The executive will ask a few questions, then a team of agents researches it live and delivers a cited report.
+            </p>
+          </div>
+        ) : (
+          <AgentStage agents={agents} collabs={collabs} phase={phase} caption={stage === "done" ? "Research complete." : caption} />
         )}
-        <div className="w-full max-w-[720px]">
-          <Composer value={input} onChange={setInput} onSend={send} running={run === "running"} placeholder="New objective…" />
-        </div>
-      </div>
-    </main>
-  )
-}
+      </section>
 
-const SUGGESTIONS = [
-  "Compare the top 3 AI coding assistants in 2026",
-  "The economics of desalination at scale",
-  "How CBDCs are being rolled out worldwide",
-]
-
-function TopBar({ phase, elapsed, stats, title, done }: { phase: Phase | null; elapsed: number; stats: Stats; title: string; done?: boolean }) {
-  return (
-    <header className="relative z-20 flex h-12 shrink-0 items-center justify-between px-4">
-      <div className="flex items-center gap-3">
-        <Link href="/chat" className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs text-white/60 backdrop-blur-xl transition-colors hover:text-white">
-          <ArrowLeft className="size-3" /> Exit
-        </Link>
-        <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.2em] text-white/30">
-          <Share2 className="size-3" /> Harness
-        </span>
-        {title && <span className="hidden max-w-[360px] truncate text-[12px] text-white/45 sm:block">{title}</span>}
-      </div>
-      {phase && (
-        <div className="flex items-center gap-3 text-[12px]">
-          <span className="hidden items-center gap-1.5 sm:flex">
-            <span className="size-1.5 rounded-full" style={{ background: PHASE_META[phase].color }} />
-            <span className="text-white/60">{PHASE_META[phase].label}</span>
-          </span>
-          <Stat n={stats.sources} label="sources" />
-          <Stat n={stats.findings} label="findings" />
-          <Stat n={stats.agentsActive} label="active" />
-          <span className="font-mono tabular-nums text-white/50">{fmt(elapsed)}</span>
-          {done && <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-[11px] text-emerald-300 backdrop-blur-xl">Complete</span>}
+      {/* composer (idle only) */}
+      {stage === "idle" && (
+        <div className="relative z-20 flex justify-center px-4 pb-6">
+          <div className="liquid-glass liquid-glass-soft glass-panel flex w-full max-w-[640px] items-end gap-2 rounded-2xl px-3 py-3">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  begin()
+                }
+              }}
+              rows={2}
+              placeholder="e.g. The state of India's EV market in 2026 — adoption, policy, key players, outlook."
+              className="max-h-32 flex-1 resize-none bg-transparent px-1.5 py-1 text-[14px] leading-relaxed text-white outline-none placeholder:text-white/30"
+            />
+            <button onClick={begin} disabled={!input.trim()} className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white text-black transition-opacity hover:opacity-90 disabled:opacity-30">
+              <ArrowUp className="size-4" />
+            </button>
+          </div>
         </div>
       )}
-    </header>
-  )
-}
 
-function Stat({ n, label }: { n: number; label: string }) {
-  return (
-    <span className="hidden items-center gap-1 md:flex">
-      <span className="tabular-nums text-white/75">{n}</span>
-      <span className="text-white/30">{label}</span>
-    </span>
-  )
-}
+      {/* live steer bar (running only) — redirect the research on the fly */}
+      {stage === "running" && (
+        <div className="relative z-20 flex flex-col items-center px-4 pb-5">
+          {steerNote && <p className="mb-1.5 text-[12px] text-sky-300/80">{steerNote}</p>}
+          <div className="liquid-glass liquid-glass-soft glass-panel flex w-full max-w-[560px] items-center gap-2 rounded-full px-3 py-1.5">
+            <textarea
+              value={steerInput}
+              onChange={(e) => setSteerInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  sendSteer()
+                }
+              }}
+              rows={1}
+              placeholder="Steer the research… e.g. 'focus on EV funds, not the market' or 'dig deeper on Elon Musk'"
+              className="max-h-20 flex-1 resize-none bg-transparent px-2 py-1.5 text-[13px] text-white outline-none placeholder:text-white/30"
+            />
+            <button
+              onClick={sendSteer}
+              disabled={!steerInput.trim() || !runId}
+              className="flex size-7 shrink-0 items-center justify-center rounded-full bg-white text-black transition-opacity hover:opacity-90 disabled:opacity-30"
+            >
+              <ArrowUp className="size-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
-function Tab({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
-  return (
-    <button onClick={onClick} className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-medium transition-colors ${active ? "bg-white/10 text-white" : "text-white/45 hover:text-white"}`}>
-      {icon}
-      {label}
-    </button>
-  )
-}
+      {stage === "done" && (
+        <div className="relative z-20 flex justify-center px-4 pb-6">
+          <button onClick={newRun} className="rounded-full border border-white/15 bg-white/[0.04] px-5 py-2.5 text-[13px] font-medium text-white/80 backdrop-blur-xl transition-colors hover:text-white">
+            New objective
+          </button>
+        </div>
+      )}
 
-function Composer({ value, onChange, onSend, running, placeholder, big }: { value: string; onChange: (v: string) => void; onSend: () => void; running: boolean; placeholder: string; big?: boolean }) {
-  return (
-    <div className={`liquid-glass liquid-glass-soft glass-panel flex items-end gap-2 rounded-2xl px-3 ${big ? "py-3" : "py-2.5"}`}>
-      <textarea
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault()
-            onSend()
-          }
-        }}
-        rows={big ? 2 : 1}
-        placeholder={placeholder}
-        className="max-h-32 flex-1 resize-none bg-transparent px-1.5 py-1 text-[14px] leading-relaxed text-white outline-none placeholder:text-white/30"
-      />
-      <button
-        onClick={onSend}
-        disabled={!value.trim() || running}
-        className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white text-black transition-opacity hover:opacity-90 disabled:opacity-30"
-      >
-        {running ? <Square className="size-3" /> : <ArrowUp className="size-4" />}
-      </button>
-    </div>
+      {/* full-screen clarify */}
+      {stage === "clarifying" && !clarify && <ClarifyLoading />}
+      {stage === "clarifying" && clarify && (
+        <ClarifyFlow
+          intro={clarify.intro}
+          questions={clarify.questions}
+          onDone={(answers) => {
+            answersRef.current = answers
+            setClarify(null)
+            startRun(objective, answers)
+          }}
+          onSkip={() => {
+            setClarify(null)
+            startRun(objective, {})
+          }}
+        />
+      )}
+
+      {/* mid-run question */}
+      {midQuestion && (
+        <ClarifyFlow
+          intro="One quick decision to keep going:"
+          questions={[midQuestion]}
+          onDone={(a) => {
+            answersRef.current = { ...answersRef.current, ...a }
+            setMidQuestion(null)
+          }}
+          onSkip={() => setMidQuestion(null)}
+        />
+      )}
+
+      {/* full-screen report reveal */}
+      {reportOpen && (
+        <ReportReveal title={title} summary={summary} sections={sections} sourceCount={sourceCount} onClose={() => setReportOpen(false)} />
+      )}
+    </main>
   )
 }

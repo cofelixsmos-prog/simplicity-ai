@@ -49,7 +49,6 @@ export function HarnessAccessGate({
 
   return (
     <main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#08080a] px-4 py-10 text-white">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_70%_50%_at_50%_20%,rgba(120,120,180,0.10),transparent_70%)]" />
 
       <div className="relative z-10 w-full max-w-[520px]">
         <Link

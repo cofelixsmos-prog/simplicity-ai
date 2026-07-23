@@ -1,6 +1,8 @@
+import { randomUUID } from "crypto"
 import { jsonResponse, preflight } from "@/lib/api/http"
 import { getCurrentUser } from "@/lib/auth"
 import { runExecutive } from "@/lib/harness/orchestrator"
+import { openRun, closeRun, drainSteers } from "@/lib/harness/steer-store"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -26,6 +28,9 @@ export async function POST(req: Request) {
   const objective = String(body.objective ?? "").trim()
   if (objective.length < 3) return jsonResponse({ error: "Provide an objective." }, { status: 400 }, req)
 
+  const runId = randomUUID()
+  openRun(runId)
+
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     async start(controller) {
@@ -36,11 +41,14 @@ export async function POST(req: Request) {
           /* controller closed */
         }
       }
+      // Tell the client the run id so it can send live steer messages.
+      emit({ t: "run", runId })
       try {
-        await runExecutive(objective, body.clarifications ?? {}, emit)
+        await runExecutive(objective, body.clarifications ?? {}, emit, () => drainSteers(runId))
       } catch (e) {
         emit({ t: "error", message: e instanceof Error ? e.message : "Execution failed." })
       } finally {
+        closeRun(runId)
         controller.close()
       }
     },
