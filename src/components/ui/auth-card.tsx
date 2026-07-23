@@ -124,7 +124,7 @@ export function AuthCard({ mode }: { mode: "login" | "register" }) {
         sessionStorage.setItem("sx-just-logged-in", "1")
         sessionStorage.setItem("sx-welcome-kind", mode)
       } catch {}
-      window.location.href = "/chat"
+      window.location.href = "/menu"
     } catch {
       setError("Network error — please try again.")
       setBusy(false)

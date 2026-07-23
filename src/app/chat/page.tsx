@@ -56,9 +56,8 @@ import { ReasoningAura } from "@/components/ui/reasoning-aura"
 import { ShaderBackground, type BgStatus } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
 import { Splash } from "@/components/ui/splash"
-import { WelcomeOverlay } from "@/components/ui/welcome-overlay"
-import { ModeSelectOverlay } from "@/components/ui/mode-select-overlay"
 import { Tooltip } from "@/components/ui/tooltip"
+import { MicButton } from "@/components/ui/mic-button"
 import { toast } from "@/components/ui/toast"
 import { playSend, playDone, playType, playBackspace } from "@/lib/sound"
 import { MODELS, DEFAULT_MODEL_ID, getModel } from "@/lib/models"
@@ -222,6 +221,7 @@ function LogoMark({ className = "" }: { className?: string }) {
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
+  const [micListening, setMicListening] = useState(false)
   const [loading, setLoading] = useState(false)
   // Holds the cinematic splash for its full reveal once per session.
   const [splashHold, setSplashHold] = useState(true)
@@ -261,9 +261,7 @@ export default function ChatPage() {
   const [gmailConnected, setGmailConnected] = useState(false)
   const [conversations, setConversations] = useState<ConvoLite[]>([])
   const [conversationId, setConversationId] = useState<string | null>(null)
-  const [showWelcome, setShowWelcome] = useState(false)
-  const [welcomeKind, setWelcomeKind] = useState<"login" | "register">("login")
-  const [showModeSelect, setShowModeSelect] = useState(false)
+  
   // PDF attachments queued for the next message — text is extracted server-side
   // (the chat models are text-only) and folded into the request, not shown raw.
   const [attachments, setAttachments] = useState<PdfAttachment[]>([])
@@ -326,17 +324,8 @@ export default function ChatPage() {
         // Mirror the account's ambient preferences to localStorage so the
         // client-only NightMode / shader components can read them synchronously.
         mirrorSettingsToLocal(parseSettings(d.user.settings))
-        // Show the welcome moment only right after a fresh login/register —
-        // not on every reload or internal navigation back to /chat.
-        try {
-          if (sessionStorage.getItem("sx-just-logged-in")) {
-            sessionStorage.removeItem("sx-just-logged-in")
-            const kind = sessionStorage.getItem("sx-welcome-kind")
-            sessionStorage.removeItem("sx-welcome-kind")
-            setWelcomeKind(kind === "register" ? "register" : "login")
-            setShowWelcome(true)
-          }
-        } catch {}
+        // The welcome moment now plays on /menu right after sign-in, so chat
+        // just loads straight in.
         const cr = await fetch("/api/conversations")
         if (cr.ok) setConversations((await cr.json()).conversations ?? [])
       } catch {
@@ -1187,9 +1176,8 @@ export default function ChatPage() {
   // The world recedes while there's something to read: a panel open, a
   // sub-agent view, or an answer streaming in.
   const calmBg =
-    showWelcome || showModeSelect || !!panelApp || !!panelDraft || !!panelVisual || agentPanelIdx !== null || (loading && !downtime)
+    !!panelApp || !!panelDraft || !!panelVisual || agentPanelIdx !== null || (loading && !downtime)
 
-  const firstName = user?.name?.trim().split(/\s+/)[0] || user?.email?.split("@")[0] || ""
 
   return (
     <>
@@ -1198,40 +1186,6 @@ export default function ChatPage() {
       {/* Same animated shader background as the landing page — tinted by app status */}
       <ShaderBackground fixed status={bgStatus} calm={calmBg} focus={focusMode} />
       <LiquidGlassFilters />
-
-      {/* Welcome-back moment: glass card breathes in over the shader, holds,
-          then dissolves to reveal the chat — same background throughout. */}
-      {showWelcome && (
-        <WelcomeOverlay
-          name={firstName}
-          kind={welcomeKind}
-          onDone={() => {
-            setShowWelcome(false)
-            setShowModeSelect(true)
-          }}
-        />
-      )}
-
-      {/* One-time mode picker right after the welcome moment: general work is
-          live today, deep research is scaffolded for later. */}
-      {showModeSelect && (
-        <ModeSelectOverlay
-          onSelect={(mode) => {
-            if (mode === "deep-research") return
-            if (mode === "studio") {
-              window.location.href = "/studio"
-              return
-            }
-            if (mode === "harness") {
-              // The /harness route itself gates on access and shows the request
-              // flow when the user isn't approved.
-              window.location.href = "/harness"
-              return
-            }
-            setShowModeSelect(false)
-          }}
-        />
-      )}
 
       {/* Dims the screen after 15s of no activity (sooner/deeper in focus mode) */}
       <InactivityDim seconds={15} focus={focusMode} />
@@ -1302,13 +1256,22 @@ export default function ChatPage() {
             focusMode ? "opacity-25 hover:opacity-100" : "opacity-100"
           }`}
         >
-          <a
-            href="/"
-            className="pointer-events-auto flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-white/90 transition-colors hover:text-white"
-          >
-            <span className="size-1.5 rounded-full bg-white/80" />
-            Simplicity
-          </a>
+          <div className="pointer-events-auto flex items-center gap-2">
+            <a
+              href="/"
+              className="flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-white/90 transition-colors hover:text-white"
+            >
+              <span className="size-1.5 rounded-full bg-white/80" />
+              Simplicity
+            </a>
+            <a
+              href="/menu"
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/15 px-2.5 py-1 text-xs font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <LayoutGrid className="size-3.5" />
+              Menu
+            </a>
+          </div>
           <div className="pointer-events-auto flex items-center gap-1.5">
             {/* Model picker (opens downward) */}
             <div className="relative">
@@ -1595,10 +1558,23 @@ export default function ChatPage() {
             }}
             className={empty ? "w-full max-w-2xl" : "mx-auto w-full max-w-3xl"}
           >
-            <div className="glass-in liquid-glass flex w-full flex-col gap-2 rounded-[28px] px-4 pb-2.5 pt-3 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.6)] transition-all duration-300 ease-out focus-within:border-white/25 focus-within:shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_24px_64px_-16px_rgba(0,0,0,0.75)]">
-              {/* attached PDFs */}
-              {(attachments.length > 0 || uploadingPdf) && (
+            <div
+              className={`glass-in liquid-glass flex w-full flex-col gap-2 rounded-[28px] px-4 pb-2.5 pt-3 shadow-[0_16px_48px_-12px_rgba(0,0,0,0.6)] transition-all duration-300 ease-out focus-within:border-white/25 focus-within:shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_24px_64px_-16px_rgba(0,0,0,0.75)] ${
+                micListening ? "!border-red-400/40 !shadow-[0_0_0_1px_rgba(248,113,113,0.35),0_0_32px_-8px_rgba(248,113,113,0.5)]" : ""
+              }`}
+            >
+              {/* attached PDFs / mic status */}
+              {(attachments.length > 0 || uploadingPdf || micListening) && (
                 <div className="flex flex-wrap items-center gap-1.5 pb-1">
+                  {micListening && (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-red-400/30 bg-red-500/10 px-2.5 py-1 text-xs text-red-200 animate-in fade-in zoom-in-95 duration-200">
+                      <span className="relative flex size-2">
+                        <span className="absolute inline-flex size-full animate-ping rounded-full bg-red-400 opacity-75" />
+                        <span className="relative inline-flex size-2 rounded-full bg-red-400" />
+                      </span>
+                      Listening…
+                    </span>
+                  )}
                   {attachments.map((a) => (
                     <span
                       key={a.name}
@@ -1643,7 +1619,7 @@ export default function ChatPage() {
                 }}
                 rows={1}
                 autoFocus
-                placeholder="Ask Simplicity anything…"
+                placeholder={micListening ? "Listening… speak now" : "Ask Simplicity anything…"}
                 className="max-h-52 min-h-[28px] w-full resize-none bg-transparent px-1 py-1 text-base leading-relaxed text-white placeholder:text-white/40 transition-[height] duration-150 ease-out focus:outline-none"
               />
 
@@ -1688,6 +1664,9 @@ export default function ChatPage() {
                       <Focus className="size-4" />
                     </button>
                   </Tooltip>
+
+                  {/* Mic — dictates straight into the composer */}
+                  <MicButton baseText={input} onResult={setInput} onListeningChange={setMicListening} />
 
                   {/* Reasoning selector */}
                   {model.supportsReasoning && (

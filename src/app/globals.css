@@ -363,12 +363,6 @@ html.lenis body {
 }
 .anim-float { animation: appleFloat 6s var(--ease-smooth) infinite; }
 
-/* Harness: flowing dashes along an active agent connection (information flow). */
-@keyframes harnessFlow {
-  to { stroke-dashoffset: -16; }
-}
-.harness-flow { animation: harnessFlow 0.6s linear infinite; }
-
 /* Bench Labs hero: drifting fireflies over the night meadow. */
 @keyframes benchFirefly {
   0%, 100% { opacity: 0.15; transform: translateY(0); }

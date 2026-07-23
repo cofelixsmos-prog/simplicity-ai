@@ -3,7 +3,7 @@
 import { randomUUID } from "crypto"
 import { and, desc, eq, lt, isNotNull } from "drizzle-orm"
 import { db, initDb } from "./index"
-import { users, sessions, conversations, messages, uploads, memories, harnessRequests, type User, type Conversation, type Message, type Upload, type Memory, type HarnessRequest } from "./schema"
+import { users, sessions, conversations, messages, uploads, memories, type User, type Conversation, type Message, type Upload, type Memory } from "./schema"
 
 // ── Users ───────────────────────────────────────────────────────────────────
 export async function createUser(
@@ -28,8 +28,6 @@ export async function createUser(
     gmailAddress: extra?.gmailAddress ?? null,
     gmailAppPassword: extra?.gmailAppPassword ?? null,
     gmailRefreshToken: null,
-    harnessAccess: 0,
-    isAdmin: 0,
     createdAt: Date.now(),
   }
   await db.insert(users).values(row)
@@ -375,79 +373,3 @@ export async function clearMemories(userId: string): Promise<void> {
   await db.delete(memories).where(eq(memories.userId, userId))
 }
 
-// ── Harness access (invite-only) ─────────────────────────────────────────────
-export async function hasHarnessAccess(userId: string): Promise<boolean> {
-  await initDb()
-  const u = (await db.select({ a: users.harnessAccess }).from(users).where(eq(users.id, userId)))[0]
-  return !!u && u.a === 1
-}
-
-export async function setHarnessAccess(userId: string, granted: boolean): Promise<void> {
-  await initDb()
-  await db.update(users).set({ harnessAccess: granted ? 1 : 0 }).where(eq(users.id, userId))
-}
-
-export async function isAdmin(userId: string): Promise<boolean> {
-  await initDb()
-  const u = (await db.select({ a: users.isAdmin }).from(users).where(eq(users.id, userId)))[0]
-  return !!u && u.a === 1
-}
-
-// Return the user's latest Harness request (to show status / avoid duplicates).
-export async function getLatestHarnessRequest(userId: string): Promise<HarnessRequest | undefined> {
-  await initDb()
-  return (
-    await db
-      .select()
-      .from(harnessRequests)
-      .where(eq(harnessRequests.userId, userId))
-      .orderBy(desc(harnessRequests.createdAt))
-      .limit(1)
-  )[0]
-}
-
-export async function createHarnessRequest(
-  userId: string,
-  reason: string,
-  useCase: string,
-  company: string | null
-): Promise<HarnessRequest> {
-  await initDb()
-  const now = Date.now()
-  const row: HarnessRequest = {
-    id: randomUUID(),
-    userId,
-    reason: reason.slice(0, 2000),
-    useCase: useCase.slice(0, 2000),
-    company: company ? company.slice(0, 200) : null,
-    status: "pending",
-    createdAt: now,
-    updatedAt: now,
-  }
-  await db.insert(harnessRequests).values(row)
-  return row
-}
-
-// Admin: list requests (newest first) joined with the requester's email/name.
-export async function listHarnessRequests(
-  limit = 200
-): Promise<(HarnessRequest & { email: string; name: string | null; granted: boolean })[]> {
-  await initDb()
-  const rows = await db
-    .select({
-      req: harnessRequests,
-      email: users.email,
-      name: users.name,
-      access: users.harnessAccess,
-    })
-    .from(harnessRequests)
-    .innerJoin(users, eq(harnessRequests.userId, users.id))
-    .orderBy(desc(harnessRequests.createdAt))
-    .limit(limit)
-  return rows.map((r) => ({ ...r.req, email: r.email, name: r.name, granted: r.access === 1 }))
-}
-
-export async function setHarnessRequestStatus(id: string, status: "pending" | "approved" | "denied"): Promise<void> {
-  await initDb()
-  await db.update(harnessRequests).set({ status, updatedAt: Date.now() }).where(eq(harnessRequests.id, id))
-}

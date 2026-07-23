@@ -29,9 +29,6 @@ export interface PublicUser {
   // is NEVER exposed to the client — only whether one is stored.
   gmailAddress: string | null
   gmailConnected: boolean
-  // Harness (invite-only autonomous orchestration).
-  harnessAccess: boolean
-  isAdmin: boolean
 }
 
 // ── Password hashing (scrypt — built into Node, no native deps) ─────────────
@@ -105,8 +102,6 @@ export async function getCurrentUser(): Promise<PublicUser | null> {
     settings: user.settings,
     gmailAddress: user.gmailAddress,
     gmailConnected: !!(user.gmailAppPassword || user.gmailRefreshToken),
-    harnessAccess: user.harnessAccess === 1,
-    isAdmin: user.isAdmin === 1,
   }
 }
 

@@ -47,16 +47,11 @@ export function initDb(): Promise<void> {
         `CREATE TABLE IF NOT EXISTS memories (
           id TEXT PRIMARY KEY, user_id TEXT NOT NULL, content TEXT NOT NULL,
           created_at INTEGER NOT NULL )`,
-        `CREATE TABLE IF NOT EXISTS harness_requests (
-          id TEXT PRIMARY KEY, user_id TEXT NOT NULL, reason TEXT NOT NULL,
-          use_case TEXT NOT NULL, company TEXT, status TEXT NOT NULL DEFAULT 'pending',
-          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL )`,
         `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
         `CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id)`,
         `CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)`,
         `CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id)`,
         `CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id)`,
-        `CREATE INDEX IF NOT EXISTS idx_harness_requests_user ON harness_requests(user_id)`,
       ],
       "write"
     )
@@ -73,8 +68,6 @@ export function initDb(): Promise<void> {
       `ALTER TABLE messages ADD COLUMN artifacts TEXT`,
       `ALTER TABLE apps ADD COLUMN user_id TEXT`,
       `ALTER TABLE drafts ADD COLUMN user_id TEXT`,
-      `ALTER TABLE users ADD COLUMN harness_access INTEGER NOT NULL DEFAULT 0`,
-      `ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0`,
     ]) {
       try {
         await client.execute(sql)

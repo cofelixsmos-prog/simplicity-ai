@@ -584,11 +584,11 @@ export default function StudioPage() {
         <div className="absolute inset-x-0 top-0 z-30 flex h-12 items-center justify-between border-b border-white/[0.06] bg-black/40 px-4 backdrop-blur-xl">
           <div className="flex items-center gap-3">
             <a
-              href="/chat"
+              href="/menu"
               className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-xs font-medium text-white/60 transition-colors hover:bg-white/5 hover:text-white"
             >
               <ArrowLeft className="size-3" />
-              Chat
+              Menu
             </a>
             <div className="h-4 w-px bg-white/10" />
             <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.2em] text-white/35">

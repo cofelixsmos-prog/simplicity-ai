@@ -8,7 +8,7 @@ import Lenis from "lenis"
 // run as fixed h-dvh viewports with their OWN inner scroll containers, so Lenis
 // must not run there — it would hijack the wheel and fight those containers.
 // We gate on pathname and only drive window scroll on the scrolling routes.
-const FIXED_VIEWPORT_PREFIXES = ["/chat", "/studio", "/harness"]
+const FIXED_VIEWPORT_PREFIXES = ["/chat", "/studio"]
 
 export function SmoothScroll() {
   const pathname = usePathname()

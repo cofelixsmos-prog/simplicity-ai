@@ -59,28 +59,8 @@ export const users = sqliteTable("users", {
   gmailAddress: text("gmail_address"),
   gmailAppPassword: text("gmail_app_password"),
   gmailRefreshToken: text("gmail_refresh_token"),
-  // Harness (invite-only autonomous orchestration). 1 = access granted.
-  // Admins flip this to enable a user; everyone starts at 0.
-  harnessAccess: integer("harness_access").notNull().default(0),
-  // 1 = this user can manage Harness access requests (admin console).
-  isAdmin: integer("is_admin").notNull().default(0),
   createdAt: integer("created_at").notNull(),
 })
-
-// A user's request for Harness access. Admins review these and grant access by
-// flipping users.harness_access. status: "pending" | "approved" | "denied".
-export const harnessRequests = sqliteTable("harness_requests", {
-  id: text("id").primaryKey(),
-  userId: text("user_id").notNull(),
-  reason: text("reason").notNull(), // why they want access
-  useCase: text("use_case").notNull(), // intended use
-  company: text("company"), // optional
-  status: text("status").notNull().default("pending"),
-  createdAt: integer("created_at").notNull(),
-  updatedAt: integer("updated_at").notNull(),
-})
-
-export type HarnessRequest = typeof harnessRequests.$inferSelect
 
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(), // the session token

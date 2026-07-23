@@ -12,7 +12,7 @@ import { NextResponse, type NextRequest } from "next/server"
 // closes the "still see /chat after logout" hole.
 
 const SESSION_COOKIE = "sid"
-const PROTECTED = ["/chat", "/studio", "/harness", "/settings"]
+const PROTECTED = ["/chat", "/studio", "/settings", "/menu"]
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
@@ -32,5 +32,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/chat/:path*", "/studio/:path*", "/harness/:path*", "/settings/:path*"],
+  matcher: ["/chat/:path*", "/studio/:path*", "/settings/:path*", "/menu/:path*"],
 }
