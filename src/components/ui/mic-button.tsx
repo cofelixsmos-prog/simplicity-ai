@@ -13,6 +13,14 @@ const ERROR_MESSAGE: Record<string, string> = {
   aborted: "", // user-initiated stop — not an error worth surfacing
 }
 
+// getUserMedia's own error names, for the explicit permission request below.
+const GUM_ERROR_MESSAGE: Record<string, string> = {
+  NotAllowedError: "Microphone access denied — allow it when your browser asks, or check its site settings.",
+  NotFoundError: "No microphone found on this device.",
+  NotReadableError: "Another app has the microphone locked — close it and try again.",
+  SecurityError: "Microphone access needs a secure (https) connection.",
+}
+
 // ── Minimal Web Speech API typings (not in the standard DOM lib) ────────────
 interface SRAlternative {
   transcript: string
@@ -73,9 +81,24 @@ export function MicButton({
     recognitionRef.current?.stop()
   }, [])
 
-  const start = useCallback(() => {
+  const start = useCallback(async () => {
     const Ctor = getSRCtor()
     if (!Ctor) return
+
+    // SpeechRecognition is supposed to raise the mic permission prompt itself,
+    // but on some Chrome builds/policies it just fails silently with no prompt
+    // at all. Requesting getUserMedia directly is the one call guaranteed to
+    // surface the native "Allow microphone?" dialog (or a real, specific
+    // error) — we don't need the stream itself, only its side effect.
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      stream.getTracks().forEach((t) => t.stop())
+    } catch (err) {
+      const name = err instanceof Error ? err.name : ""
+      toast(GUM_ERROR_MESSAGE[name] ?? "Couldn't access the microphone.", "error")
+      return
+    }
+
     const recognition = new Ctor()
     recognition.lang = "en-IN"
     recognition.continuous = true
