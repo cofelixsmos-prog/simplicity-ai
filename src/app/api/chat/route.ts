@@ -719,7 +719,11 @@ export async function POST(request: Request) {
 
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
-  const MAX_STEPS = 4 // safety cap on tool-loop iterations (coding flow: spawn team → synthesize)
+  // Safety cap on tool-loop iterations. Big tasks (a report + two PDFs + a deck)
+  // legitimately need several tool turns, so 4 was starving them — they'd hit
+  // the cap mid-work and the stream would just end with no final answer. 10 is
+  // enough headroom; if we still hit it we force a closing turn (below).
+  const MAX_STEPS = 10
 
   // The agent loop: stream a model turn, run any tools it calls, repeat until
   // it produces a final answer (or we hit MAX_STEPS). Output is NDJSON events:
@@ -729,6 +733,11 @@ export async function POST(request: Request) {
       const emit = (ev: Record<string, unknown>) =>
         controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"))
       const toolCtx: ToolCtx = { emit, complete, completeCoder, attachments: turnAttachments, user: userRow ?? undefined }
+
+      // Whether the model produced a final (tool-free) answer. If it never did
+      // — because it hit MAX_STEPS still calling tools — we force one closing
+      // turn so the user always gets a written response instead of silence.
+      let finishedCleanly = false
 
       try {
         for (let step = 0; step < MAX_STEPS; step++) {
@@ -829,7 +838,10 @@ export async function POST(request: Request) {
           clearTimeout(to)
 
           const calls = toolCalls.filter((c) => c.name)
-          if (calls.length === 0) break // no tools → final answer already streamed
+          if (calls.length === 0) {
+            finishedCleanly = true
+            break // no tools → final answer already streamed
+          }
 
           // Record the assistant's tool-call turn, then run each tool.
           convo.push({
@@ -890,6 +902,57 @@ export async function POST(request: Request) {
             convo.push({ role: "tool", tool_call_id: c.id, content: res.result })
           }
           // Loop continues: the model now sees the tool results.
+        }
+
+        // Hit the cap while still mid-work → force ONE final tool-free turn so
+        // the user gets a real closing answer instead of a silent stop.
+        if (!finishedCleanly && !voice && !studioMode) {
+          const closeCtrl = new AbortController()
+          const closeTo = setTimeout(() => closeCtrl.abort(), TURN_TIMEOUT_MS)
+          try {
+            const closeBody: Record<string, unknown> = {
+              model: binding.providerModel,
+              stream: true,
+              temperature: 0.6,
+              messages: [
+                ...convo,
+                { role: "user", content: "Wrap up now: give me the final answer summarizing what you produced. Do not call any more tools." },
+              ],
+            }
+            tuneBody(closeBody, binding.provider)
+            const closeRes = await fetch(provider.url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, Accept: "text/event-stream" },
+              body: JSON.stringify(closeBody),
+              signal: closeCtrl.signal,
+            })
+            if (closeRes.ok && closeRes.body) {
+              const reader = closeRes.body.getReader()
+              const decoder = new TextDecoder()
+              let buf = ""
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                buf += decoder.decode(value, { stream: true })
+                const lines = buf.split("\n")
+                buf = lines.pop() ?? ""
+                for (const line of lines) {
+                  const t = line.trim()
+                  if (!t.startsWith("data:")) continue
+                  const p = t.slice(5).trim()
+                  if (p === "[DONE]") continue
+                  try {
+                    const delta = (JSON.parse(p) as { choices?: { delta?: { content?: string } }[] }).choices?.[0]?.delta?.content
+                    if (delta) emit({ t: "text", v: delta })
+                  } catch {}
+                }
+              }
+            }
+          } catch {
+            /* best-effort close */
+          } finally {
+            clearTimeout(closeTo)
+          }
         }
       } catch {
         emit({ t: "error" })

@@ -14,12 +14,23 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!upload) return new Response("Not found", { status: 404 })
 
   const bytes = Buffer.from(upload.data, "base64")
-  const inline = new URL(req.url).searchParams.get("download") == null
+
+  // Only render a narrow allowlist of types inline in the browser. Anything else
+  // is forced to download, so a stored file can never execute as HTML/JS on our
+  // origin (stored-XSS defense-in-depth). nosniff stops MIME-sniffing bypasses.
+  const mime = upload.mime || "application/octet-stream"
+  const INLINE_OK = mime === "application/pdf" || mime.startsWith("image/")
+  const wantsDownload = new URL(req.url).searchParams.get("download") != null
+  const inline = INLINE_OK && !wantsDownload
+  // Strip characters that could inject response headers via the filename.
+  const safeName = upload.name.replace(/[\r\n"\\]/g, "_").slice(0, 200)
+
   return new Response(bytes, {
     status: 200,
     headers: {
-      "Content-Type": upload.mime || "application/octet-stream",
-      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${upload.name.replace(/"/g, "")}"`,
+      "Content-Type": mime,
+      "X-Content-Type-Options": "nosniff",
+      "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${safeName}"`,
       "Content-Length": String(bytes.length),
       "Cache-Control": "private, no-store",
     },

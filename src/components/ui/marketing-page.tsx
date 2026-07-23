@@ -1,5 +1,6 @@
 import { Navbar } from "@/components/ui/navbar"
 import { Footer } from "@/components/ui/footer"
+import { safeJsonLd } from "@/lib/safe-json-ld"
 
 export interface FAQItem {
   q: string
@@ -79,7 +80,7 @@ export function MarketingPage({
             type="application/ld+json"
             // eslint-disable-next-line react/no-danger
             dangerouslySetInnerHTML={{
-              __html: JSON.stringify({
+              __html: safeJsonLd({
                 "@context": "https://schema.org",
                 "@type": "FAQPage",
                 mainEntity: faq.map((item) => ({

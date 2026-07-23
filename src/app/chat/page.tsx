@@ -84,6 +84,10 @@ interface Message {
   // file is a PDF, `spec` carries the same document-block JSON as the inline
   // ```pdf preview so it renders identically (title/blocks + a real download).
   file?: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec }
+  // ALL files produced this message (multiple create_pdf/create_ppt calls). The
+  // singular `file` above is kept for backward-compat with older persisted rows;
+  // new messages populate this array so a second file never replaces the first.
+  files?: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec }[]
   // Whether the staged email was already sent (persisted so reload shows "sent").
   emailSent?: boolean
 }
@@ -531,6 +535,7 @@ export default function ChatPage() {
                 inbox?: InboxItem[]
                 deleteEmails?: DeleteItem[]
                 file?: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec }
+                files?: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec }[]
               }
               if (a.app) msg.app = a.app
               if (a.draft) msg.draft = a.draft
@@ -538,7 +543,9 @@ export default function ChatPage() {
               if (a.email) msg.email = a.email
               if (a.inbox) msg.inbox = a.inbox
               if (a.deleteEmails) msg.deleteEmails = a.deleteEmails
-              if (a.file) msg.file = a.file
+              // New rows persist `files`; older rows have a single `file`.
+              if (a.files?.length) msg.files = a.files
+              else if (a.file) msg.files = [a.file]
               if ((a as Record<string, unknown>).emailSent) msg.emailSent = true
             } catch {}
           }
@@ -775,7 +782,7 @@ export default function ChatPage() {
       let deleteEmails: DeleteItem[] | undefined
       let app: AppData | undefined
       let draft: DraftData | undefined
-      let file: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec } | undefined
+      const files: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec }[] = []
 
       // Replace the trailing assistant placeholder with the latest text/steps/agents.
       const flush = () => {
@@ -791,7 +798,7 @@ export default function ChatPage() {
             deleteEmails,
             app,
             draft,
-            file,
+            files: files.length ? [...files] : undefined,
           }
           return copy
         })
@@ -929,9 +936,9 @@ export default function ChatPage() {
               })
             }
           } else if (ev.t === "file") {
-            // A generated file (create_pdf) — show the same document-style
-            // preview as the inline ```pdf block when a spec is present.
-            if (ev.id && ev.name) file = { id: ev.id, name: ev.name, mime: ev.mime, size: ev.size, spec: ev.spec }
+            // A generated file (create_pdf/create_ppt). PUSH — a second file must
+            // never replace the first (that was the "two PDFs, one shows" bug).
+            if (ev.id && ev.name) files.push({ id: ev.id, name: ev.name, mime: ev.mime, size: ev.size, spec: ev.spec })
             flush()
           } else if (ev.t === "code") {
             // The coding agent built/edited an app — open it in the code canvas
@@ -991,7 +998,7 @@ export default function ChatPage() {
         if (email) artifacts.email = email
         if (inbox) artifacts.inbox = inbox
         if (deleteEmails) artifacts.deleteEmails = deleteEmails
-        if (file) artifacts.file = file
+        if (files.length) artifacts.files = files
         fetch(`/api/conversations/${convoId}/messages`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1035,7 +1042,7 @@ export default function ChatPage() {
         if (msg.app) artifacts.app = msg.app
         if (msg.draft) artifacts.draft = msg.draft
         if (msg.email) artifacts.email = msg.email
-        if (msg.file) artifacts.file = msg.file
+        if (msg.files?.length) artifacts.files = msg.files
         artifacts.emailSent = true
         fetch(`/api/conversations/${conversationId}/messages`, {
           method: "PATCH",
@@ -1470,30 +1477,32 @@ export default function ChatPage() {
                             (m.deleteEmails && m.deleteEmails.length > 0) ||
                             m.app ||
                             m.draft ||
-                            m.file ? null : (
+                            (m.files && m.files.length > 0) ? null : (
                             <div className="flex items-center pt-1">
                               <span className="size-2 animate-pulse rounded-full bg-white/55" />
                             </div>
                           )}
-                          {m.file && (
-                            m.file.spec ? (
+                          {m.files?.map((f) =>
+                            f.spec ? (
                               <PdfBlock
-                                spec={m.file.spec}
-                                downloadUrl={`/api/uploads/${m.file.id}?download`}
-                                downloadName={m.file.name}
+                                key={f.id}
+                                spec={f.spec}
+                                downloadUrl={`/api/uploads/${f.id}?download`}
+                                downloadName={f.name}
                               />
                             ) : (
                               <a
-                                href={`/api/uploads/${m.file.id}?download`}
+                                key={f.id}
+                                href={`/api/uploads/${f.id}?download`}
                                 className="mt-3 inline-flex items-center gap-3 rounded-2xl border border-white/12 bg-white/[0.04] px-4 py-3 transition-colors hover:border-white/25 hover:bg-white/[0.07]"
                               >
                                 <span className="flex size-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05]">
                                   <FileText className="size-4 text-white/70" />
                                 </span>
                                 <span className="min-w-0">
-                                  <span className="block truncate text-[14px] font-medium text-white">{m.file.name}</span>
+                                  <span className="block truncate text-[14px] font-medium text-white">{f.name}</span>
                                   <span className="block text-[11px] text-white/45">
-                                    {m.file.size ? `${Math.round(m.file.size / 1024)} KB · ` : ""}Download
+                                    {f.size ? `${Math.round(f.size / 1024)} KB · ` : ""}Download
                                   </span>
                                 </span>
                               </a>

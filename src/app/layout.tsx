@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toast";
 import { NightMode } from "@/components/ui/night-mode";
 import { SmoothScroll } from "@/components/ui/smooth-scroll";
 import { CookieConsent } from "@/components/ui/cookie-consent";
+import { safeJsonLd } from "@/lib/safe-json-ld";
 
 const poppins = Poppins({
   variable: "--font-sans",
@@ -105,7 +106,7 @@ export default function RootLayout({
         <script
           type="application/ld+json"
           // eslint-disable-next-line react/no-danger
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }}
+          dangerouslySetInnerHTML={{ __html: safeJsonLd(JSON_LD) }}
         />
         <GlassPointer />
         <SmoothScroll />

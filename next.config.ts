@@ -56,6 +56,10 @@ const nextConfig: NextConfig = {
           { key: "X-DNS-Prefetch-Control", value: "on" },
           // Only meaningful over HTTPS (Render terminates TLS); ignored on http://localhost.
           { key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" },
+          // Isolate our browsing context from cross-origin windows/popups
+          // (mitigates cross-origin leaks / Spectre-class attacks). Commonly
+          // flagged as missing by security scanners.
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
         ],
       },
     ];
