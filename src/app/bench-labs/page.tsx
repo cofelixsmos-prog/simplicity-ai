@@ -13,9 +13,8 @@ export const metadata: Metadata = {
 }
 
 const PROJECTS = [
-  { name: "Discord bot", desc: "A community bot that brings Bench Labs' tools and experiments into the conversation.", accent: "#5865F2" },
-  { name: "PixelModel", desc: "An open model effort exploring efficient, reproducible generation.", accent: "#A78BFA" },
-  { name: "Benchmarks", desc: "Open, reproducible benchmarks and datasets for evaluating models honestly.", accent: "#34D399" },
+  { name: "PixelModel", desc: "Text to image generation model series.", accent: "#A78BFA" },
+  { name: "Leaderboard", desc: "Open, reproducible benchmarks and datasets for evaluating models honestly.", accent: "#34D399" },
 ]
 
 export default function BenchLabsPage() {
