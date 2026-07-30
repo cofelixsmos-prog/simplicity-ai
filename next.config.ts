@@ -5,6 +5,18 @@ const nextConfig: NextConfig = {
   // auto-externalizes it) so it's required at runtime, not bundled.
   serverExternalPackages: ["@libsql/client"],
 
+  // Build-time memory. As the app grew (fusion, automations, spaces) the
+  // production build began OOM-crashing during "Collecting page data" — the
+  // default fans out to one worker per CPU core, and each worker holds a full
+  // copy of the module graph. On a constrained host (Hostinger) that build
+  // silently fails and the *previous* successful build keeps being served,
+  // which looks like old features randomly reappearing. Capping the workers
+  // and enabling webpack's low-memory mode keeps peak RAM under the ceiling.
+  experimental: {
+    cpus: 2,
+    webpackMemoryOptimizations: true,
+  },
+
   // "Terms and Conditions" and "Terms of Service" are the same document, so the
   // common alternative URLs point at the single canonical /terms page rather
   // than duplicating (and eventually contradicting) the text.
