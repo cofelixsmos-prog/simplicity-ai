@@ -29,7 +29,7 @@ export function FusionDebug({ data }: { data: FusionDebugData }) {
         className="group flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] text-white/55 transition-colors hover:bg-white/[0.06] hover:text-white/80"
       >
         <Sparkles className="size-3.5 text-white/40 group-hover:text-white/60" />
-        <span className="italic" style={{ transform: "skewX(-6deg)" }}>fusion process</span>
+        <span className="font-light" style={{ transform: "skewX(-1.5deg)" }}>fusion process</span>
         <span className="rounded bg-white/10 px-1.5 text-[9px] font-medium uppercase tracking-wider text-white/40">dev</span>
         <ChevronRight className={`size-3.5 text-white/35 transition-transform ${open ? "rotate-90" : ""}`} />
       </button>

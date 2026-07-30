@@ -19,28 +19,26 @@ export function FusionThinking() {
     let timer: ReturnType<typeof setTimeout>
     const tick = () => {
       setI(() => Math.floor(Math.random() * WORDS.length))
-      timer = setTimeout(tick, 900 + Math.random() * 700)
+      timer = setTimeout(tick, 2200 + Math.random() * 1200)
     }
-    timer = setTimeout(tick, 700)
+    timer = setTimeout(tick, 1400)
     return () => clearTimeout(timer)
   }, [])
 
   return (
-    <div className="flex items-center gap-2.5 pt-1">
-      <span className="size-2 animate-pulse rounded-full bg-white/50" />
+    <div className="flex items-center gap-2 pt-1">
       <span
         key={i}
-        className="fusion-word select-none text-[15px] italic text-white/55"
-        style={{ transform: "skewX(-8deg)" }}
+        className="fusion-word select-none text-[12.5px] font-light tracking-tight text-white/50"
       >
         {WORDS[i]}…
       </span>
       <style>{`
         @keyframes fusionWordIn {
-          from { opacity: 0; transform: skewX(-8deg) translateY(3px); }
-          to   { opacity: 1; transform: skewX(-8deg) translateY(0); }
+          from { opacity: 0; transform: skewX(-1.5deg) translateY(2px); }
+          to   { opacity: 1; transform: skewX(-1.5deg) translateY(0); }
         }
-        .fusion-word { animation: fusionWordIn 0.35s ease-out; display: inline-block; }
+        .fusion-word { animation: fusionWordIn 0.3s ease-out; display: inline-block; transform: skewX(-1.5deg); }
       `}</style>
     </div>
   )
