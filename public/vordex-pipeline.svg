@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 720" font-family="system-ui, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L6,3 L0,6 Z" fill="rgba(255,255,255,0.45)"/>
+    </marker>
+    <linearGradient id="finalfill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1b2e"/><stop offset="1" stop-color="#101018"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="920" height="720" fill="#0a0a0b"/>
+
+  <!-- title -->
+  <text x="460" y="50" text-anchor="middle" font-size="38" font-weight="700" letter-spacing="-1.5" fill="#ededec">Vordex</text>
+  <text x="460" y="76" text-anchor="middle" font-size="12.5" letter-spacing="1" fill="#8a8a92" font-family="ui-monospace, 'SF Mono', monospace">FOUR MODELS · FOUR PERSONAS · ONE ANSWER</text>
+
+  <!-- ── Stage 1 · parallel drafts ─────────────────────────────────────── -->
+  <text x="38" y="116" font-size="11" letter-spacing="2" fill="#6b6b70" font-family="ui-monospace, monospace">STAGE 1 — PARALLEL DRAFTS</text>
+
+  <!-- Skeptic -->
+  <g>
+    <rect x="38" y="128" width="196" height="140" rx="14" fill="#121214" stroke="rgba(255,255,255,0.08)"/>
+    <rect x="38" y="128" width="196" height="3" rx="1.5" fill="#818cf8"/>
+    <circle cx="58" cy="163" r="4" fill="#818cf8"/>
+    <text x="72" y="168" font-size="18" font-weight="700" fill="#ededec">Skeptic</text>
+    <text x="54" y="196" font-size="11.5" fill="#818cf8" font-family="ui-monospace, monospace">deepseek-v4-flash</text>
+    <text x="54" y="240" font-size="13" fill="#9a9aa2">Attack the premise —</text>
+    <text x="54" y="257" font-size="13" fill="#9a9aa2">find the hidden flaw.</text>
+  </g>
+  <!-- Visionary -->
+  <g>
+    <rect x="254" y="128" width="196" height="140" rx="14" fill="#121214" stroke="rgba(255,255,255,0.08)"/>
+    <rect x="254" y="128" width="196" height="3" rx="1.5" fill="#f472b6"/>
+    <circle cx="274" cy="163" r="4" fill="#f472b6"/>
+    <text x="288" y="168" font-size="18" font-weight="700" fill="#ededec">Visionary</text>
+    <text x="270" y="196" font-size="11.5" fill="#f472b6" font-family="ui-monospace, monospace">ling-3.0-flash</text>
+    <text x="270" y="240" font-size="13" fill="#9a9aa2">The bold, non-obvious</text>
+    <text x="270" y="257" font-size="13" fill="#9a9aa2">reframe.</text>
+  </g>
+  <!-- Logician -->
+  <g>
+    <rect x="470" y="128" width="196" height="140" rx="14" fill="#121214" stroke="rgba(255,255,255,0.08)"/>
+    <rect x="470" y="128" width="196" height="3" rx="1.5" fill="#2dd4bf"/>
+    <circle cx="490" cy="163" r="4" fill="#2dd4bf"/>
+    <text x="504" y="168" font-size="18" font-weight="700" fill="#ededec">Logician</text>
+    <text x="486" y="196" font-size="11.5" fill="#2dd4bf" font-family="ui-monospace, monospace">nemotron-3-ultra</text>
+    <text x="486" y="240" font-size="13" fill="#9a9aa2">Rigor, proof, and</text>
+    <text x="486" y="257" font-size="13" fill="#9a9aa2">edge cases.</text>
+  </g>
+  <!-- Engineer -->
+  <g>
+    <rect x="686" y="128" width="196" height="140" rx="14" fill="#121214" stroke="rgba(255,255,255,0.08)"/>
+    <rect x="686" y="128" width="196" height="3" rx="1.5" fill="#fbbf24"/>
+    <circle cx="706" cy="163" r="4" fill="#fbbf24"/>
+    <text x="720" y="168" font-size="18" font-weight="700" fill="#ededec">Engineer</text>
+    <text x="702" y="196" font-size="11.5" fill="#fbbf24" font-family="ui-monospace, monospace">north-mini-code</text>
+    <text x="702" y="240" font-size="13" fill="#9a9aa2">Make it real —</text>
+    <text x="702" y="257" font-size="13" fill="#9a9aa2">concrete &amp; buildable.</text>
+  </g>
+
+  <!-- converge: drafts flow down into one bus, then into critique -->
+  <g stroke="rgba(255,255,255,0.22)" stroke-width="1.5" fill="none">
+    <path d="M136,268 L136,300"/>
+    <path d="M352,268 L352,300"/>
+    <path d="M568,268 L568,300"/>
+    <path d="M784,268 L784,300"/>
+    <path d="M136,300 L784,300"/>
+    <path d="M460,300 L460,340" marker-end="url(#arrow)"/>
+  </g>
+  <text x="472" y="326" font-size="11" fill="#6b6b70" font-family="ui-monospace, monospace">4 drafts</text>
+
+  <!-- ── Stage 2 · cross-critique ──────────────────────────────────────── -->
+  <rect x="160" y="344" width="600" height="76" rx="14" fill="#121214" stroke="rgba(129,140,248,0.28)"/>
+  <text x="184" y="372" font-size="11" letter-spacing="1.5" fill="#818cf8" font-family="ui-monospace, monospace">STAGE 2 — CROSS-CRITIQUE</text>
+  <text x="184" y="398" font-size="14.5" fill="#dcdce2">Every draft is challenged — attack assumptions, not style.</text>
+  <text x="736" y="372" text-anchor="end" font-size="10.5" fill="#6b6b70" font-family="ui-monospace, monospace">deepseek ★</text>
+
+  <path d="M460,420 L460,454" stroke="rgba(255,255,255,0.22)" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="472" y="442" font-size="10.5" fill="#6b6b70" font-family="ui-monospace, monospace">drafts + critique</text>
+
+  <!-- ── Stage 3 · synthesis ───────────────────────────────────────────── -->
+  <rect x="210" y="458" width="500" height="76" rx="14" fill="#121214" stroke="rgba(255,255,255,0.1)"/>
+  <text x="234" y="486" font-size="11" letter-spacing="1.5" fill="#8a8a92" font-family="ui-monospace, monospace">STAGE 3/4 — SYNTHESIS</text>
+  <text x="234" y="512" font-size="14.5" fill="#dcdce2">Reconcile into one — strengths of each, weaknesses of none.</text>
+  <text x="686" y="486" text-anchor="end" font-size="10.5" fill="#6b6b70" font-family="ui-monospace, monospace">deepseek ★</text>
+
+  <path d="M460,534 L460,568" stroke="rgba(255,255,255,0.22)" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+  <text x="472" y="556" font-size="10.5" fill="#6b6b70" font-family="ui-monospace, monospace">fused</text>
+
+  <!-- ── Final answer ──────────────────────────────────────────────────── -->
+  <rect x="270" y="572" width="380" height="86" rx="16" fill="url(#finalfill)" stroke="rgba(129,140,248,0.5)"/>
+  <text x="460" y="606" text-anchor="middle" font-size="19" font-weight="700" fill="#ffffff">One answer</text>
+  <text x="460" y="632" text-anchor="middle" font-size="12.5" fill="#b8b9c8">Streamed in Simplicity's voice — the debate stays hidden.</text>
+
+  <text x="460" y="694" text-anchor="middle" font-size="11" fill="#4a4a4e" font-family="ui-monospace, monospace">VORDEX · MODEL FUSION ENGINE</text>
+</svg>

@@ -166,6 +166,42 @@ export async function listMessages(
   })
 }
 
+export interface MailAttachment {
+  filename: string
+  content: Buffer
+  contentType: string
+}
+
+// Download the file attachments of a single message (by uid). Used by the
+// automation worker to save attachments to Drive.
+export async function getAttachments(user: User, uid: number): Promise<MailAttachment[]> {
+  return withClient(user, async (client) => {
+    const lock = await client.getMailboxLock("INBOX")
+    try {
+      const out: MailAttachment[] = []
+      for await (const msg of client.fetch([uid], { uid: true, source: true }, { uid: true })) {
+        try {
+          const parsed = await simpleParser(msg.source as Buffer)
+          for (const a of parsed.attachments ?? []) {
+            if (a.content && a.filename && a.content.length > 0) {
+              out.push({
+                filename: a.filename,
+                content: a.content as Buffer,
+                contentType: a.contentType || "application/octet-stream",
+              })
+            }
+          }
+        } catch {
+          /* unparseable — skip */
+        }
+      }
+      return out
+    } finally {
+      lock.release()
+    }
+  })
+}
+
 // Move messages to Trash (recoverable). Returns how many were moved.
 export async function trashMessages(user: User, uids: number[]): Promise<number> {
   if (uids.length === 0) return 0

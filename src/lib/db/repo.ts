@@ -3,7 +3,7 @@
 import { randomUUID } from "crypto"
 import { and, desc, eq, lt, isNotNull } from "drizzle-orm"
 import { db, initDb } from "./index"
-import { users, sessions, conversations, messages, uploads, memories, type User, type Conversation, type Message, type Upload, type Memory } from "./schema"
+import { users, sessions, conversations, messages, uploads, memories, automations, automationEvents, type User, type Conversation, type Message, type Upload, type Memory, type Automation, type AutomationEvent } from "./schema"
 
 // ── Users ───────────────────────────────────────────────────────────────────
 export async function createUser(
@@ -371,5 +371,123 @@ export async function deleteMemory(id: string, userId: string): Promise<void> {
 export async function clearMemories(userId: string): Promise<void> {
   await initDb()
   await db.delete(memories).where(eq(memories.userId, userId))
+}
+
+// ── Automations ──────────────────────────────────────────────────────────────
+export interface NewAutomation {
+  userId: string
+  name: string
+  prompt: string
+  workflow: string[]
+  services: string[]
+  permissions: Record<string, Record<string, boolean>>
+  config: { approvalMode: boolean; rateLimitPerHour: number }
+}
+
+export async function createAutomation(a: NewAutomation): Promise<Automation> {
+  await initDb()
+  const now = Date.now()
+  const row: Automation = {
+    id: randomUUID(),
+    userId: a.userId,
+    name: a.name.slice(0, 80),
+    prompt: a.prompt.slice(0, 2000),
+    workflow: JSON.stringify(a.workflow),
+    services: JSON.stringify(a.services),
+    permissions: JSON.stringify(a.permissions),
+    config: JSON.stringify(a.config),
+    status: "draft",
+    state: "{}",
+    stats: "{}",
+    createdAt: now,
+    updatedAt: now,
+    lastRunAt: null,
+    lastActionAt: null,
+  }
+  await db.insert(automations).values(row)
+  return row
+}
+
+export async function listAutomations(userId: string): Promise<Automation[]> {
+  await initDb()
+  return db.select().from(automations).where(eq(automations.userId, userId)).orderBy(desc(automations.createdAt))
+}
+
+export async function getAutomation(id: string, userId: string): Promise<Automation | undefined> {
+  await initDb()
+  return (await db.select().from(automations).where(and(eq(automations.id, id), eq(automations.userId, userId))))[0]
+}
+
+// For the background worker: every automation currently in "running" state,
+// across all users.
+export async function listRunningAutomations(): Promise<Automation[]> {
+  await initDb()
+  return db.select().from(automations).where(eq(automations.status, "running"))
+}
+
+export async function updateAutomation(
+  id: string,
+  userId: string,
+  patch: Partial<Pick<Automation, "name" | "status" | "permissions" | "config" | "state" | "stats" | "workflow" | "services" | "lastRunAt" | "lastActionAt">>
+): Promise<void> {
+  await initDb()
+  await db.update(automations).set({ ...patch, updatedAt: Date.now() }).where(and(eq(automations.id, id), eq(automations.userId, userId)))
+}
+
+// Worker-side update (no user scoping — the worker already loaded the row).
+export async function patchAutomationState(id: string, patch: Partial<Automation>): Promise<void> {
+  await initDb()
+  await db.update(automations).set({ ...patch, updatedAt: Date.now() }).where(eq(automations.id, id))
+}
+
+export async function deleteAutomation(id: string, userId: string): Promise<void> {
+  await initDb()
+  await db.delete(automations).where(and(eq(automations.id, id), eq(automations.userId, userId)))
+  await db.delete(automationEvents).where(eq(automationEvents.automationId, id))
+}
+
+export async function addAutomationEvent(e: {
+  automationId: string
+  userId: string
+  kind: string
+  title: string
+  detail?: Record<string, unknown>
+  status?: string
+}): Promise<AutomationEvent> {
+  await initDb()
+  const now = Date.now()
+  const row: AutomationEvent = {
+    id: randomUUID(),
+    automationId: e.automationId,
+    userId: e.userId,
+    ts: now,
+    kind: e.kind,
+    title: e.title.slice(0, 300),
+    detail: e.detail ? JSON.stringify(e.detail) : null,
+    status: e.status ?? "success",
+    createdAt: now,
+  }
+  await db.insert(automationEvents).values(row)
+  return row
+}
+
+export async function listAutomationEvents(automationId: string, limit = 100): Promise<AutomationEvent[]> {
+  await initDb()
+  return db
+    .select()
+    .from(automationEvents)
+    .where(eq(automationEvents.automationId, automationId))
+    .orderBy(desc(automationEvents.ts))
+    .limit(Math.min(limit, 400))
+}
+
+export async function getAutomationEvent(id: string): Promise<AutomationEvent | undefined> {
+  await initDb()
+  return (await db.select().from(automationEvents).where(eq(automationEvents.id, id)))[0]
+}
+
+export async function setAutomationEventStatus(id: string, status: string, title?: string): Promise<void> {
+  await initDb()
+  await db.update(automationEvents).set(title ? { status, title } : { status }).where(eq(automationEvents.id, id))
 }
 

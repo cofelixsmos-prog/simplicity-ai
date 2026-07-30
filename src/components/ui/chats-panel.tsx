@@ -91,7 +91,8 @@ export function ChatsPanel({
               {filtered.map((c) => (
                 <li
                   key={c.id}
-                  className={`group flex items-center gap-2 rounded-xl px-2.5 py-2 transition-colors ${
+                  onClick={() => { if (editing !== c.id) onSelect(c.id) }}
+                  className={`group flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 transition-colors ${
                     c.id === activeId ? "bg-white/10" : "hover:bg-white/[0.05]"
                   }`}
                 >
@@ -110,16 +111,17 @@ export function ChatsPanel({
                       onKeyDown={(e) => {
                         if (e.key === "Enter") commitRename(c.id)
                       }}
+                      onClick={(e) => e.stopPropagation()}
                       className="min-w-0 flex-1 rounded-md bg-white/10 px-2 py-1 text-sm text-white focus:outline-none focus:ring-1 focus:ring-white/30"
                     />
                   ) : (
-                    <button onClick={() => onSelect(c.id)} className="min-w-0 flex-1 truncate text-left text-sm text-white/85">
+                    <span className="min-w-0 flex-1 truncate text-left text-sm text-white/85">
                       {c.title}
-                    </button>
+                    </span>
                   )}
 
                   {/* row actions */}
-                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100" onClick={(e) => e.stopPropagation()}>
                     {editing === c.id ? (
                       <button onClick={() => commitRename(c.id)} className="rounded-md p-1.5 text-white/55 hover:bg-white/10 hover:text-white" aria-label="Save name">
                         <Check className="size-3.5" />

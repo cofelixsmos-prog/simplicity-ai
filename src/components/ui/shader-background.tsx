@@ -88,6 +88,26 @@ export function ShaderBackground({
   const [temp, setTemp] = useState(0)
   const [bgTheme, setBgTheme] = useState<BgTheme>("default")
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
+  // Transient animation speed multiplier — pulsed by a "shader-boost" event
+  // (e.g. switching to Vordex): speeds up, then eases back to normal.
+  const [boost, setBoost] = useState(1)
+
+  useEffect(() => {
+    const onBoost = () => {
+      const dur = 2000, peak = 3
+      const start = performance.now()
+      let raf = 0
+      const tick = (t: number) => {
+        const p = Math.min(1, (t - start) / dur)
+        setBoost(1 + (peak - 1) * Math.sin(Math.PI * p)) // 1 → peak → 1
+        if (p < 1) raf = requestAnimationFrame(tick)
+        else setBoost(1)
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    window.addEventListener("shader-boost", onBoost)
+    return () => window.removeEventListener("shader-boost", onBoost)
+  }, [])
 
   useEffect(() => {
     setMounted(true)
@@ -154,7 +174,7 @@ export function ShaderBackground({
   const full = { style: { width: "100%", height: "100%" } as const }
 
   const renderAlternateShader = () => {
-    const spd = animate ? baseSpeed : 0
+    const spd = animate ? baseSpeed * boost : 0
     switch (bgTheme) {
       case "metaballs":
         return (
@@ -314,7 +334,7 @@ export function ShaderBackground({
               grainMixer={0}
               grainOverlay={0}
               offsetX={0}
-              speed={animate ? baseSpeed : 0}
+              speed={animate ? baseSpeed * boost : 0}
             />
             <div
               className="absolute inset-0 transition-opacity duration-[2400ms] ease-out"

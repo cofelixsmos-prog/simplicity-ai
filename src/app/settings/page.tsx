@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { ArrowLeft, Check, Loader2, Mail, HardDrive, Shield, Eye, Sparkles, User, PenLine, Palette, Upload } from "lucide-react"
+import { ArrowLeft, Check, Loader2, Mail, HardDrive, Shield, Eye, Sparkles, User, PenLine, Palette, Upload, Bot } from "lucide-react"
+import { AutomationsSettings } from "@/components/ui/automations-settings"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
 import { toast } from "@/components/ui/toast"
@@ -281,6 +282,16 @@ export default function SettingsPage() {
               </div>
             )}
           </Section>
+
+          {/* Automations history */}
+          <div id="automations" className="scroll-mt-6">
+            <Section title="Automations" icon={<Bot className="size-4" />}>
+              <p className="mb-4 text-xs text-white/45">
+                Your 24/7 background agents. Set them up by asking in chat; review what they&apos;ve done here.
+              </p>
+              <AutomationsSettings />
+            </Section>
+          </div>
 
           {/* System Prompt */}
           <Section title="Custom Instructions" icon={<PenLine className="size-4" />}>

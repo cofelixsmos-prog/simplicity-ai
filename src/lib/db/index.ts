@@ -47,11 +47,22 @@ export function initDb(): Promise<void> {
         `CREATE TABLE IF NOT EXISTS memories (
           id TEXT PRIMARY KEY, user_id TEXT NOT NULL, content TEXT NOT NULL,
           created_at INTEGER NOT NULL )`,
+        `CREATE TABLE IF NOT EXISTS automations (
+          id TEXT PRIMARY KEY, user_id TEXT NOT NULL, name TEXT NOT NULL, prompt TEXT NOT NULL,
+          workflow TEXT NOT NULL, services TEXT NOT NULL, permissions TEXT NOT NULL, config TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft', state TEXT NOT NULL DEFAULT '{}', stats TEXT NOT NULL DEFAULT '{}',
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, last_run_at INTEGER, last_action_at INTEGER )`,
+        `CREATE TABLE IF NOT EXISTS automation_events (
+          id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, user_id TEXT NOT NULL, ts INTEGER NOT NULL,
+          kind TEXT NOT NULL, title TEXT NOT NULL, detail TEXT, status TEXT NOT NULL DEFAULT 'success',
+          created_at INTEGER NOT NULL )`,
         `CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)`,
         `CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id)`,
         `CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id)`,
         `CREATE INDEX IF NOT EXISTS idx_uploads_user ON uploads(user_id)`,
         `CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_automations_user ON automations(user_id)`,
+        `CREATE INDEX IF NOT EXISTS idx_automation_events_auto ON automation_events(automation_id)`,
       ],
       "write"
     )

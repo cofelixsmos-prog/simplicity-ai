@@ -8,7 +8,8 @@
 import { randomUUID } from "crypto"
 import { eq } from "drizzle-orm"
 import { db, initDb } from "@/lib/db"
-import { addMemory, setUserSettings } from "@/lib/db/repo"
+import { addMemory, setUserSettings, listAutomations as repoListAutomations, getAutomation, listAutomationEvents, patchAutomationState } from "@/lib/db/repo"
+import { planAutomation } from "@/lib/automations/engine"
 import { drafts, apps, type User } from "@/lib/db/schema"
 import { parseSettings, serializeSettings } from "@/lib/settings"
 import { listMessages, modifyMessages, saveDraft, friendlyImapError, type ModifyAction } from "@/lib/imap"
@@ -1090,6 +1091,81 @@ async function spawnAgents(args: Record<string, unknown>, ctx?: ToolCtx): Promis
   }
 }
 
+// ── Automations: set up / update 24/7 background agents ──────────────────────
+// propose_automation runs the reliable server-side planner and hands the client
+// an interactive review card (workflow + least-privilege permissions). The user
+// accepts/edits/denies it in chat — the tool does NOT create anything itself.
+async function proposeAutomation(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user) return { result: "The user needs to be signed in to set up an automation." }
+  const prompt = String(args.prompt ?? "").trim()
+  if (!prompt) return { result: "Ask the user what the automation should do." }
+  const plan = await planAutomation(prompt)
+  return {
+    result:
+      "I've drafted the automation and shown the user a review card with its workflow and the exact permissions it " +
+      "needs. STOP here — do not describe the steps yourself. Wait for them to accept, edit the permissions, or ask " +
+      "for changes. If they want changes, ask 2–3 short questions, then call propose_automation again.",
+    detail: plan.name,
+    ui: { t: "automation", plan: { prompt, ...plan } },
+  }
+}
+
+async function listUserAutomations(_args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user) return { result: "The user needs to be signed in." }
+  const rows = await repoListAutomations(ctx.user.id)
+  if (rows.length === 0) return { result: "The user has no automations yet.", detail: "none" }
+  const lines = rows.map((a) => `- id=${a.id} · "${a.name}" · ${a.status} · instruction: ${a.prompt}`)
+  return { result: `The user's automations:\n${lines.join("\n")}`, detail: `${rows.length}` }
+}
+
+async function updateUserAutomation(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user) return { result: "The user needs to be signed in." }
+  const id = String(args.id ?? "").trim()
+  const changes = String(args.changes ?? "").trim()
+  if (!id || !changes) return { result: "Provide the automation id (from list_automations) and the change to make." }
+  const existing = await getAutomation(id, ctx.user.id)
+  if (!existing) return { result: `No automation found with id "${id}". Call list_automations to get the right id.` }
+
+  const mergedPrompt = `${existing.prompt}\n\nUpdated instruction: ${changes}`
+  const newPlan = await planAutomation(mergedPrompt)
+  const oldPerms = existing.permissions
+  const oldWorkflow = existing.workflow
+  const permsChanged = JSON.stringify(newPlan.permissions) !== oldPerms
+  const workflowChanged = JSON.stringify(newPlan.workflow) !== oldWorkflow
+
+  if (permsChanged || workflowChanged) {
+    // Behavior/permissions changed → re-show the review card for confirmation.
+    return {
+      result:
+        "This change updates what the automation does and/or which permissions it needs, so I've shown the user the " +
+        "review card again to confirm. STOP and wait for them to accept or deny.",
+      detail: existing.name,
+      ui: { t: "automation", plan: { id, prompt: mergedPrompt, ...newPlan } },
+    }
+  }
+  // Minor instruction tweak → apply silently (ownership already verified above).
+  await patchAutomationState(id, { prompt: mergedPrompt, workflow: JSON.stringify(newPlan.workflow) })
+  return {
+    result: `Updated "${existing.name}" — its instruction now includes: ${changes}. It keeps running with the same permissions.`,
+    detail: existing.name,
+  }
+}
+
+async function automationActivity(args: Record<string, unknown>, ctx?: ToolCtx): Promise<ToolResult> {
+  if (!ctx?.user) return { result: "The user needs to be signed in." }
+  const id = String(args.id ?? "").trim()
+  if (!id) return { result: "Provide the automation id (from list_automations)." }
+  const a = await getAutomation(id, ctx.user.id)
+  if (!a) return { result: `No automation found with id "${id}".` }
+  const events = await listAutomationEvents(id, 60)
+  const stats = a.stats
+  const log = events.map((e) => `${new Date(e.ts).toLocaleString()} [${e.status}] ${e.title}`).join("\n")
+  return {
+    result: `Activity for "${a.name}" (stats: ${stats}):\n${log || "No activity yet."}\n\nSummarize this for the user factually.`,
+    detail: `${events.length} events`,
+  }
+}
+
 export const TOOLS: Record<string, AgentTool> = {
   web_search: {
     schema: {
@@ -1487,6 +1563,83 @@ export const TOOLS: Record<string, AgentTool> = {
     },
     label: () => "Looking up your artifacts",
     run: listArtifacts,
+  },
+  propose_automation: {
+    schema: {
+      type: "function",
+      function: {
+        name: "propose_automation",
+        description:
+          "Set up a 24/7 BACKGROUND automation. Call this whenever the user asks for something ongoing/recurring that " +
+          "should keep happening automatically without them — e.g. \"check my mail 24/7 and reply\", \"summarize my " +
+          "inbox every morning\", \"whenever someone sends a PDF save it to Drive\", \"archive promotional emails\". " +
+          "It shows the user an interactive card in chat to review the workflow and approve the exact permissions. " +
+          "After calling it, STOP and let the user accept or ask for changes — don't describe the steps yourself.",
+        parameters: {
+          type: "object",
+          properties: {
+            prompt: { type: "string", description: "The user's automation request, in their own words." },
+          },
+          required: ["prompt"],
+        },
+      },
+    },
+    label: () => "Setting up an automation",
+    run: proposeAutomation,
+  },
+  list_automations: {
+    schema: {
+      type: "function",
+      function: {
+        name: "list_automations",
+        description:
+          "List the user's existing 24/7 automations with their ids, names, status and instructions. Call this before " +
+          "update_automation or automation_activity so you have the right id, or when the user asks what automations they have.",
+        parameters: { type: "object", properties: {} },
+      },
+    },
+    label: () => "Listing automations",
+    run: listUserAutomations,
+  },
+  update_automation: {
+    schema: {
+      type: "function",
+      function: {
+        name: "update_automation",
+        description:
+          "Change an existing automation's instruction (e.g. \"also archive newsletters\", \"stop replying to no-reply " +
+          "senders\", \"be more formal\"). Pass its id (from list_automations) and the change. If the change alters what " +
+          "it does or which permissions it needs, the review card reappears for the user to confirm; otherwise it's applied silently.",
+        parameters: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "The automation id (from list_automations)." },
+            changes: { type: "string", description: "What to change about the automation." },
+          },
+          required: ["id", "changes"],
+        },
+      },
+    },
+    label: () => "Updating an automation",
+    run: updateUserAutomation,
+  },
+  automation_activity: {
+    schema: {
+      type: "function",
+      function: {
+        name: "automation_activity",
+        description:
+          "Get an automation's recent activity + stats so you can tell the user what it has done (\"what did my inbox " +
+          "assistant do today?\", \"what did it reply to Sarah?\"). Pass its id (from list_automations).",
+        parameters: {
+          type: "object",
+          properties: { id: { type: "string", description: "The automation id (from list_automations)." } },
+          required: ["id"],
+        },
+      },
+    },
+    label: () => "Checking automation activity",
+    run: automationActivity,
   },
   search_drive: {
     schema: {

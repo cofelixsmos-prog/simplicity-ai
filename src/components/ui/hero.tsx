@@ -76,10 +76,10 @@ export function Hero({
             {buttonText}
           </button>
           <a
-            href="#capabilities"
+            href="/vordex"
             className="w-full rounded-full border border-white/15 px-8 py-4 text-center text-[15px] font-medium text-white/80 backdrop-blur-md transition-all duration-300 hover:-translate-y-0.5 hover:border-white/30 hover:text-white sm:w-auto"
           >
-            See what it does
+            Model Fusion in simplicity
           </a>
         </div>
       </div>

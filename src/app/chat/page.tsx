@@ -31,6 +31,7 @@ import {
   Focus,
   LayoutGrid,
   Settings,
+  Bot,
 } from "lucide-react"
 import { MessageContent, type Visual } from "@/components/ui/message-content"
 import { PdfBlock, type PdfSpec } from "@/components/ui/pdf-block"
@@ -51,6 +52,10 @@ import { FocusBar } from "@/components/ui/focus-bar"
 import { AmbientSound } from "@/components/ui/ambient-sound"
 import { StatusBoard } from "@/components/ui/status-board"
 import { CommandPalette, type Command } from "@/components/ui/command-palette"
+import { TasksOverlay } from "@/components/ui/tasks-overlay"
+import { WorkflowBlock, type AutomationPlan } from "@/components/ui/workflow-block"
+import { FusionDebug, type FusionDebugData } from "@/components/ui/fusion-debug"
+import { FusionThinking } from "@/components/ui/fusion-thinking"
 import { type ConvoLite } from "@/components/ui/chat-sidebar"
 import { ReasoningAura } from "@/components/ui/reasoning-aura"
 import { ShaderBackground, type BgStatus } from "@/components/ui/shader-background"
@@ -60,7 +65,7 @@ import { Tooltip } from "@/components/ui/tooltip"
 import { MicButton } from "@/components/ui/mic-button"
 import { toast } from "@/components/ui/toast"
 import { playSend, playDone, playType, playBackspace } from "@/lib/sound"
-import { MODELS, DEFAULT_MODEL_ID, getModel } from "@/lib/models"
+import { MODELS, DEFAULT_MODEL_ID, FUSION_MODEL_ID, getModel } from "@/lib/models"
 import { parseSettings, mirrorSettingsToLocal, readLocalFlag, LS_AUTO_NIGHT, LS_AUTO_MORNING, DEFAULT_SETTINGS } from "@/lib/settings"
 
 interface Message {
@@ -79,6 +84,13 @@ interface Message {
   // (not just when first created).
   app?: AppData
   draft?: DraftData
+  // An automation review card (propose_automation / update_automation).
+  automation?: AutomationPlan
+  // DEV-only: raw Vordex drafts + critique (never sent in production).
+  fusionDebug?: FusionDebugData
+  // This turn ran through Vordex Model Fusion — show the playful thinking word
+  // instead of the raw step list.
+  fusion?: boolean
   // A generated file (e.g. a create_pdf result) offered as a download. When the
   // file is a PDF, `spec` carries the same document-block JSON as the inline
   // ```pdf preview so it renders identically (title/blocks + a real download).
@@ -245,6 +257,7 @@ export default function ChatPage() {
   const [downtime, setDowntime] = useState(false)
   const [showNotice, setShowNotice] = useState(false)
   const [showBoard, setShowBoard] = useState(false)
+  const [tasksOpen, setTasksOpen] = useState(false)
   const [returnMsg, setReturnMsg] = useState(false)
   const [errorNote, setErrorNote] = useState("")
   const [failedModel, setFailedModel] = useState<string | undefined>(undefined)
@@ -252,6 +265,7 @@ export default function ChatPage() {
   // Track which assistant message indices have had their questions answered / plan decided.
   const [answeredIdx, setAnsweredIdx] = useState<Set<number>>(new Set())
   const [planDecisions, setPlanDecisions] = useState<Record<number, "approved" | "denied">>({})
+  const [automationDecisions, setAutomationDecisions] = useState<Record<number, "created" | "denied">>({})
   // Auth + chat history
   const [user, setUser] = useState<{ email: string; name: string | null } | null | undefined>(undefined)
   // The user's custom "rules" (system prompt) — forwarded with each chat request.
@@ -502,14 +516,21 @@ export default function ChatPage() {
   }
 
   const loadConversation = async (id: string) => {
-    if (loading) return
+    if (loading) {
+      abortRef.current?.abort()
+      setLoading(false)
+    }
+    if (downtime) closeDowntime()
     setPanelVisual(null)
     setPanelDraft(null)
     setPanelApp(null)
     setAgentPanelIdx(null)
     try {
       const res = await fetch(`/api/conversations/${id}`)
-      if (!res.ok) return
+      if (!res.ok) {
+        toast("Couldn't load that conversation.", "error")
+        return
+      }
       const d = await res.json()
       setMessages(
         (d.messages ?? []).map((m: { role: "user" | "assistant"; content: string; artifacts?: string | null }) => {
@@ -532,7 +553,6 @@ export default function ChatPage() {
               if (a.email) msg.email = a.email
               if (a.inbox) msg.inbox = a.inbox
               if (a.deleteEmails) msg.deleteEmails = a.deleteEmails
-              // New rows persist `files`; older rows have a single `file`.
               if (a.files?.length) msg.files = a.files
               else if (a.file) msg.files = [a.file]
               if ((a as Record<string, unknown>).emailSent) msg.emailSent = true
@@ -542,8 +562,6 @@ export default function ChatPage() {
         })
       )
       setConversationId(id)
-      // Mark all loaded assistant messages as "answered" / plan-decided so
-      // questions and plan blocks render in their completed state on reload.
       const loaded = d.messages ?? []
       const answeredSet = new Set<number>()
       const decisions: Record<number, "approved" | "denied"> = {}
@@ -553,7 +571,9 @@ export default function ChatPage() {
       })
       setAnsweredIdx(answeredSet)
       setPlanDecisions(decisions)
-    } catch {}
+    } catch {
+      toast("Couldn't load that conversation.", "error")
+    }
   }
 
   const deleteConvo = async (id: string) => {
@@ -652,22 +672,23 @@ export default function ChatPage() {
     setThinking(false)
     setMessages((m) => [...m, { role: "assistant", content: "" }])
 
-    // The model only ever sees plain text, so fold each PDF's extracted text
-    // into the outgoing request as clearly-delimited context — the visible
-    // bubble and persisted history stay just the user's typed message.
-    const apiMessages: Message[] = pendingAttachments.length
-      ? next.map((m, i) =>
-          i === next.length - 1
-            ? {
-                ...m,
-                content:
-                  pendingAttachments
-                    .map((a) => `[Attached PDF: ${a.name}${a.truncated ? " (truncated)" : ""}]\n${a.text}`)
-                    .join("\n\n") + `\n\n${trimmed}`,
-              }
-            : m
-        )
-      : next
+    // The API only ever uses each message's role + content, so send ONLY those.
+    // Crucially this strips heavy artifact fields — most importantly `app.files`,
+    // which holds a built project's entire multi-file source. Without this, every
+    // turn after a build re-uploads the whole codebase, bloating the request until
+    // it errors out. The model only sees plain text anyway.
+    // For a turn with PDF attachments we also fold each PDF's extracted text into
+    // the last (user) message as clearly-delimited context.
+    const isLast = (i: number) => i === next.length - 1
+    const apiMessages = next.map((m, i) => ({
+      role: m.role,
+      content:
+        pendingAttachments.length && isLast(i)
+          ? pendingAttachments
+              .map((a) => `[Attached PDF: ${a.name}${a.truncated ? " (truncated)" : ""}]\n${a.text}`)
+              .join("\n\n") + `\n\n${trimmed}`
+          : m.content,
+    }))
 
     // Ensure a conversation exists, then persist the user message (best-effort).
     let convoId = conversationId
@@ -718,6 +739,8 @@ export default function ChatPage() {
     // with backoff before giving up, so a single flaky attempt doesn't dead-end
     // the turn. We only ever retry BEFORE any tokens have streamed; once the
     // model starts answering we never re-send.
+    // Vordex routes through the model-fusion pipeline instead of normal chat.
+    const endpoint = modelId === FUSION_MODEL_ID ? "/api/fusion" : "/api/chat"
     const MAX_ATTEMPTS = 3
     const getResponse = async (): Promise<Response | null> => {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -726,7 +749,7 @@ export default function ChatPage() {
           // Fresh controller per attempt so an aborted retry doesn't poison the next.
           ctrl = new AbortController()
           abortRef.current = ctrl
-          const res = await fetch("/api/chat", {
+          const res = await fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: requestBody,
@@ -771,6 +794,9 @@ export default function ChatPage() {
       let deleteEmails: DeleteItem[] | undefined
       let app: AppData | undefined
       let draft: DraftData | undefined
+      let automation: AutomationPlan | undefined
+      let fusionDebug: FusionDebugData | undefined
+      const isFusion = endpoint === "/api/fusion"
       const files: { id: string; name: string; mime?: string; size?: number; spec?: PdfSpec }[] = []
 
       // Replace the trailing assistant placeholder with the latest text/steps/agents.
@@ -787,6 +813,9 @@ export default function ChatPage() {
             deleteEmails,
             app,
             draft,
+            automation,
+            fusionDebug,
+            fusion: isFusion || undefined,
             files: files.length ? [...files] : undefined,
           }
           return copy
@@ -829,6 +858,8 @@ export default function ChatPage() {
             mime?: string
             size?: number
             spec?: PdfSpec
+            plan?: AutomationPlan
+            v_debug?: FusionDebugData
           }
           try {
             ev = JSON.parse(t)
@@ -944,6 +975,14 @@ export default function ChatPage() {
             setPanelDraft(null)
             setAgentPanelIdx(null)
             setPanelApp(a)
+          } else if (ev.t === "automation" && ev.plan) {
+            // An automation review card — render it inline in this message.
+            automation = ev.plan
+            flush()
+          } else if (ev.t === "fusion_debug" && ev.v_debug) {
+            // DEV-only: raw Vordex drafts + critique (server never sends in prod).
+            fusionDebug = ev.v_debug
+            flush()
           } else if (ev.t === "text") {
             acc += ev.v ?? ""
             if (acc.trim().length > 0) setThinking(false)
@@ -1055,6 +1094,15 @@ export default function ChatPage() {
     setPlanDecisions((d) => ({ ...d, [idx]: "denied" }))
     send("[User denied the plan] Please ask what to change.")
   }
+  // Automation review card handlers
+  const handleAutomationDeny = (idx: number) => {
+    setAutomationDecisions((d) => ({ ...d, [idx]: "denied" }))
+    send("[User wants to change the proposed automation] Ask 2–3 short questions to refine it, then call propose_automation again.")
+  }
+  const handleAutomationCreated = (idx: number, name: string, updated: boolean) => {
+    setAutomationDecisions((d) => ({ ...d, [idx]: "created" }))
+    toast(updated ? `Updated “${name}” — running.` : `“${name}” is now running 24/7.`)
+  }
 
   // Prefill the composer with a starter prompt and focus it (used by ⌘K).
   const prefill = (text: string) => {
@@ -1126,7 +1174,10 @@ export default function ChatPage() {
       icon: Cpu,
       hint: m.id === modelId ? "active" : m.label,
       keywords: `${m.label} ${m.description}`,
-      run: () => setModelId(m.id),
+      run: () => {
+        setModelId(m.id)
+        if (m.id === FUSION_MODEL_ID) window.dispatchEvent(new Event("shader-boost"))
+      },
     })),
     ...(model.supportsReasoning
       ? (["off", "low", "medium", "high"] as Reasoning[]).map((r) => ({
@@ -1142,6 +1193,8 @@ export default function ChatPage() {
     { id: "focus", group: "Actions", label: focusMode ? "Exit Focus mode" : "Enter Focus mode", icon: Focus, keywords: "focus concentrate deep study distraction dim dictionary", run: () => setFocusMode((v) => !v) },
     { id: "memory", group: "Actions", label: "View memory", icon: Brain, keywords: "memory remember personalization facts what you know forget privacy", run: () => setMemoryOpen(true) },
     { id: "chats", group: "Actions", label: "Manage chats", icon: MessageSquare, keywords: "search rename pin delete conversations history organize", run: () => setChatsOpen(true) },
+    { id: "tasks", group: "Actions", label: "Running tasks", icon: Bot, keywords: "automation automations agents background running task jobs running what is running stop pause remove", run: () => setTasksOpen(true) },
+    { id: "go-automations", group: "Go to", label: "Automations", icon: Bot, keywords: "agents background 24/7 tasks inbox assistant", run: () => (window.location.href = "/automations") },
     { id: "go-settings", group: "Go to", label: "Settings", icon: Settings, keywords: "preferences account gmail drive system prompt dimming animation", run: () => (window.location.href = "/settings") },
     { id: "go-home", group: "Go to", label: "Home", icon: Home, run: () => (window.location.href = "/") },
     { id: "go-dev", group: "Go to", label: "Developers", icon: Code2, run: () => (window.location.href = "/developers") },
@@ -1237,6 +1290,7 @@ export default function ChatPage() {
 
       {/* ⌘K command palette */}
       <CommandPalette commands={commands} />
+      <TasksOverlay open={tasksOpen} onClose={() => setTasksOpen(false)} />
 
       {/* Apple-Intelligence-style activation flash when "high" is selected */}
       <ReasoningAura trigger={auraTrigger} />
@@ -1294,6 +1348,7 @@ export default function ChatPage() {
                         onClick={() => {
                           setModelId(m.id)
                           setModelMenu(false)
+                          if (m.id === FUSION_MODEL_ID) window.dispatchEvent(new Event("shader-boost"))
                         }}
                         className={`flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/10 ${
                           m.id === modelId ? "bg-white/10" : ""
@@ -1383,7 +1438,7 @@ export default function ChatPage() {
                             <span className="text-[13px] font-semibold text-foreground">Simplicity</span>
                             <span className="font-mono text-[10px] text-muted-foreground">{model.label}</span>
                           </div>
-                          {m.steps && m.steps.length > 0 && (
+                          {m.steps && m.steps.length > 0 && !m.fusion && (
                             <ToolActivity steps={m.steps} />
                           )}
                           {m.agents && m.agents.length > 0 && (
@@ -1427,6 +1482,9 @@ export default function ChatPage() {
                                 </button>
                               )}
                             </>
+                          ) : m.fusion && i === messages.length - 1 && loading ? (
+                            // Vordex is fusing — playful slanted thinking word.
+                            <FusionThinking />
                           ) : thinking && i === messages.length - 1 ? (
                             // One calm, breathing indicator — same motion language everywhere.
                             <div className="flex items-center gap-2 pt-1">
@@ -1440,6 +1498,7 @@ export default function ChatPage() {
                             (m.deleteEmails && m.deleteEmails.length > 0) ||
                             m.app ||
                             m.draft ||
+                            m.automation ||
                             (m.files && m.files.length > 0) ? null : (
                             <div className="flex items-center pt-1">
                               <span className="size-2 animate-pulse rounded-full bg-white/55" />
@@ -1507,6 +1566,17 @@ export default function ChatPage() {
                                 setPanelDraft(m.draft!)
                               }}
                             />
+                          )}
+                          {m.automation && (
+                            <WorkflowBlock
+                              plan={m.automation}
+                              decided={automationDecisions[i] ?? null}
+                              onDeny={() => handleAutomationDeny(i)}
+                              onCreated={(name, updated) => handleAutomationCreated(i, name, updated)}
+                            />
+                          )}
+                          {process.env.NODE_ENV === "development" && m.fusionDebug && (
+                            <FusionDebug data={m.fusionDebug} />
                           )}
                         </div>
                       </div>

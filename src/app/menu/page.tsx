@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Sparkles, FlaskConical, Box, ArrowRight, Lock } from "lucide-react"
+import { Sparkles, FlaskConical, Box, ArrowRight, Lock, Orbit } from "lucide-react"
 import { ShaderBackground } from "@/components/ui/shader-background"
 import { LiquidGlassFilters } from "@/components/ui/liquid-glass-filters"
 import { WelcomeOverlay } from "@/components/ui/welcome-overlay"
@@ -88,6 +88,13 @@ export default function MenuPage() {
             desc="Design 2D and 3D objects on a live canvas — cars, buildings, floor plans, mechanisms."
             accent="#38BDF8"
             onClick={() => router.push("/studio")}
+          />
+          <ModeCard
+            icon={<Orbit className="size-5" strokeWidth={1.6} />}
+            title="Spaces"
+            desc="Type a topic — watch it unfold into a living mind map you can explore endlessly."
+            accent="#818CF8"
+            onClick={() => router.push("/spaces")}
           />
           <ModeCard
             icon={<FlaskConical className="size-5" strokeWidth={1.6} />}

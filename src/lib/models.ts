@@ -14,7 +14,18 @@ export const MODELS: ModelOption[] = [
     description: "Fast, capable, always on",
     supportsReasoning: false,
   },
+  {
+    id: "vordex",
+    label: "Vx",
+    name: "Vordex",
+    description: "Model Fusion — four personas debate into one answer. Deeper, slower.",
+    supportsReasoning: false,
+  },
 ]
+
+// Turns that use Vordex go through the fusion pipeline (/api/fusion) instead of
+// the normal single-model chat.
+export const FUSION_MODEL_ID = "vordex"
 
 export const DEFAULT_MODEL_ID = "r1"
 

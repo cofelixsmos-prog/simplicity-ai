@@ -149,3 +149,37 @@ export async function createDriveFile(
   const data = (await res.json()) as { id: string; name: string; webViewLink?: string }
   return { id: data.id, name: data.name, link: data.webViewLink ?? "" }
 }
+
+// Upload BINARY content (e.g. an email attachment) to Drive.
+export async function uploadDriveBinary(
+  user: User,
+  name: string,
+  bytes: Buffer,
+  mimeType = "application/octet-stream"
+): Promise<{ id: string; name: string; link: string } | { error: string }> {
+  const token = await accessToken(user)
+  if (!token) return { error: "Google isn't connected." }
+
+  const boundary = "sx" + randomBytes(12).toString("hex")
+  const pre = Buffer.from(
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n` +
+      JSON.stringify({ name }) +
+      `\r\n--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`,
+    "utf8"
+  )
+  const post = Buffer.from(`\r\n--${boundary}--`, "utf8")
+  const body = Buffer.concat([pre, bytes, post])
+
+  const res = await fetch(`${UPLOAD}/files?uploadType=multipart&fields=${encodeURIComponent("id,name,webViewLink")}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": `multipart/related; boundary=${boundary}`,
+    },
+    body: body as unknown as BodyInit,
+  })
+  if (res.status === 403) return { error: RECONNECT }
+  if (!res.ok) return { error: `Couldn't save to Drive (HTTP ${res.status}).` }
+  const data = (await res.json()) as { id: string; name: string; webViewLink?: string }
+  return { id: data.id, name: data.name, link: data.webViewLink ?? "" }
+}

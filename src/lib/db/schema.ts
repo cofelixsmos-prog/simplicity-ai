@@ -103,6 +103,52 @@ export const memories = sqliteTable("memories", {
 
 export type Memory = typeof memories.$inferSelect
 
+// ── Automations (24/7 background agents) ─────────────────────────────────────
+// A user-defined agent that runs server-side on a schedule, watches a connected
+// service (Gmail/Drive), and acts when relevant events occur.
+export const automations = sqliteTable("automations", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  name: text("name").notNull(),
+  prompt: text("prompt").notNull(), // the natural-language request
+  // JSON: string[] of human-readable workflow steps ("Watch Gmail" → "Reply").
+  workflow: text("workflow").notNull(),
+  // JSON: which services this touches, e.g. ["gmail","drive"].
+  services: text("services").notNull(),
+  // JSON: granted permission flags, e.g. { gmail: { read:true, reply:true, trash:false } }.
+  permissions: text("permissions").notNull(),
+  // JSON: { approvalMode:boolean, rateLimitPerHour:number }.
+  config: text("config").notNull(),
+  // "draft" (created, not yet activated) | "running" | "paused".
+  status: text("status").notNull().default("draft"),
+  // JSON: worker state (lastUid, lastError, …) — opaque to the UI.
+  state: text("state").notNull().default("{}"),
+  // JSON: rolling counters { emailsRead, repliesSent, filesSaved, … }.
+  stats: text("stats").notNull().default("{}"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+  lastRunAt: integer("last_run_at"),
+  lastActionAt: integer("last_action_at"),
+})
+
+// A single human-readable entry in an automation's activity feed / audit log.
+export const automationEvents = sqliteTable("automation_events", {
+  id: text("id").primaryKey(),
+  automationId: text("automation_id").notNull(),
+  userId: text("user_id").notNull(),
+  ts: integer("ts").notNull(),
+  kind: text("kind").notNull(), // "email" | "reply" | "file" | "system" | "audit"
+  title: text("title").notNull(),
+  // JSON: { steps?: string[], decision?: string, result?: string, meta?: {...} }.
+  detail: text("detail"),
+  // "success" | "error" | "pending" | "skipped".
+  status: text("status").notNull().default("success"),
+  createdAt: integer("created_at").notNull(),
+})
+
+export type Automation = typeof automations.$inferSelect
+export type AutomationEvent = typeof automationEvents.$inferSelect
+
 export type User = typeof users.$inferSelect
 export type Session = typeof sessions.$inferSelect
 export type Conversation = typeof conversations.$inferSelect
